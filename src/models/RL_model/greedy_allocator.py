@@ -22,15 +22,17 @@ def greedy_allocator(state, spend_budget: int, count_model) -> np.ndarray:
     if n == 0 or spend_budget <= 0:
         return alloc
 
-    # Precompute baseline predicted counts (unclipped by allocation)
-    raw_counts = count_model.predict(frontier, np.full(n, spend_budget, dtype=int))
-
     for _ in range(spend_budget):
-        # Marginal gain: how many more recruits does person i get with +1 allocation?
-        # Use raw predicted counts clipped to current vs +1 allocation
-        counts_now = np.clip(raw_counts, 0, alloc)
-        counts_plus1 = np.clip(raw_counts, 0, alloc + 1)
-        scores = counts_plus1 - counts_now
+
+        counts_now = count_model.predict(frontier, alloc)
+
+        scores = np.zeros(n)
+
+        for i in range(n):
+            alloc[i] += 1
+            counts_new = count_model.predict(frontier, alloc)
+            scores[i] = counts_new[i] - counts_now[i]
+            alloc[i] -= 1  # restore
 
         best_i = int(np.argmax(scores))
         alloc[best_i] += 1
