@@ -12,7 +12,7 @@ Curve meaning in this recruiting setting:
     y-axis: fraction of total recruits obtained
 
 Usage:
-    python -m src.scripts.train_rl_recruiting \
+    python -m src.scripts.recruiting_driver \
         --model_path checkpoints/diffusion/ddpm_HIV.pt \
         --data_dir ICPSR_22140 \
         --std_name HIV \
@@ -320,10 +320,12 @@ def main():
     )
     print(f"  budget={args.budget}, max_rounds={args.max_rounds}, discount={args.discount}")
 
+    frontier_rng = np.random.default_rng(args.seed)
+
     def initial_frontier_fn():
         return graph_data.sample_initial_frontier(
             n=args.initial_frontier_size,
-            seed=np.random.randint(0, 10**9),
+            seed=int(frontier_rng.integers(1 << 31)),
         )
 
     cfg = DQNConfig(
