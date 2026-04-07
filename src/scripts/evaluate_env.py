@@ -39,12 +39,15 @@ def random_policy(frontier_size: int, budget_remaining: int, rng: np.random.Gene
     if frontier_size == 0:
         return np.array([], dtype=int)
     max_per_person = max(1, budget_remaining // frontier_size)
+    if budget_remaining == 0:
+        return np.zeros(frontier_size, dtype=int)
     action = rng.integers(0, max_per_person + 1, size=frontier_size)
-    # Ensure we don't exceed budget
-    while action.sum() > budget_remaining:
-        idx = rng.integers(0, frontier_size)
-        if action[idx] > 0:
-            action[idx] -= 1
+    # Scale down if over budget
+    total = action.sum()
+    if total > budget_remaining:
+        action = np.zeros(frontier_size, dtype=int)
+        for _ in range(budget_remaining):
+            action[rng.integers(0, frontier_size)] += 1
     return action
 
 
@@ -122,8 +125,9 @@ def main():
 
     # Fit count model on graph degrees
     print("Fitting count model...")
-    covariates_array = np.array([graph_data.covariates[n] for n in sorted(graph_data.covariates)])
-    degrees_array = np.array([graph_data.node_degrees[n] for n in sorted(graph_data.node_degrees)])
+    common_nodes = sorted(set(graph_data.covariates) & set(graph_data.node_degrees))
+    covariates_array = np.array([graph_data.covariates[n] for n in common_nodes])
+    degrees_array = np.array([graph_data.node_degrees[n] for n in common_nodes])
     count_model = GaussianCountModel(seed=args.seed)
     count_model.fit(covariates_array, degrees_array)
 

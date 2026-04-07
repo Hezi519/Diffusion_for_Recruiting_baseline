@@ -334,7 +334,9 @@ class DDPMCovariateModel(AbstractCovariateModel):
 
     def save(self, path: str) -> None:
         """Save model checkpoint."""
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
         checkpoint = {
             "network_state_dict": self.network.state_dict(),
             "cov_dim": self.cov_dim,

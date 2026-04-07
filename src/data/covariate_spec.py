@@ -49,7 +49,8 @@ def continuous_to_one_hot(x: np.ndarray) -> np.ndarray:
         Array of shape (n, 72) with valid one-hot encoding (int).
     """
     x = np.asarray(x, dtype=np.float64)
-    if x.ndim == 1:
+    squeeze = x.ndim == 1
+    if squeeze:
         x = x[np.newaxis, :]
     assert x.shape[1] == COVARIATE_DIM
 
@@ -58,7 +59,7 @@ def continuous_to_one_hot(x: np.ndarray) -> np.ndarray:
         group = x[:, start:end]
         winners = np.argmax(group, axis=1)
         result[np.arange(x.shape[0]), start + winners] = 1
-    return result
+    return result[0] if squeeze else result
 
 
 def validate_one_hot(x: np.ndarray) -> bool:

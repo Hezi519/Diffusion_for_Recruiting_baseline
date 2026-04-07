@@ -116,6 +116,8 @@ class RecruitingEnv:
             self._state.frontier_covariates, action
         )
         counts = np.asarray(counts, dtype=int)
+        assert np.all(counts >= 0) and np.all(counts <= action), \
+            "Count model returned counts outside [0, allocation]"
 
         # Step 2: Generate child covariates for each parent
         new_covariates = []
