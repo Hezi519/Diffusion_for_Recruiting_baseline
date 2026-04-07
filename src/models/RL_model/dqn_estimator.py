@@ -104,11 +104,13 @@ class BudgetDQNSolver:
         initial_frontier_fn: Callable[[], np.ndarray],
         budget_allocator: Callable[[object, int], np.ndarray],
         cfg: DQNConfig,
+        seed: int = 42,
     ):
         self.env = env
         self.initial_frontier_fn = initial_frontier_fn
         self.budget_allocator = budget_allocator
         self.cfg = cfg
+        self.rng = np.random.default_rng(seed)
 
         self.max_budget = int(env.initial_budget)
         self.num_actions = self.max_budget + 1
@@ -137,9 +139,11 @@ class BudgetDQNSolver:
         self.total_steps = 0
         self.loss_history: List[float] = []
 
-    def _reset_state(self):
+    def _reset_state(self, seed: int | None = None):
         initial_frontier = self.initial_frontier_fn()
-        return self.env.reset(initial_frontier)
+        if seed is None:
+            seed = int(self.rng.integers(1 << 31))
+        return self.env.reset(initial_frontier, seed=seed)
 
     def _allowed_actions(self, state) -> List[int]:
         rb = int(state.budget_remaining)
@@ -259,20 +263,11 @@ class BudgetDQNSolver:
 
         self.epsilon = max(self.cfg.eps_end, self.epsilon * self.cfg.eps_decay)
 
-    def train(self) -> "BudgetDQNSolver":
-        for ep in range(self.cfg.train_episodes):
-            self.train_one_episode()
-
-            if (ep + 1) % self.cfg.target_update_interval == 0:
-                self._soft_update_target()
-
-        return self
-
-    def evaluate(self, n_episodes_eval: int) -> np.ndarray:
+    def evaluate(self, n_episodes_eval: int, seed_offset: int = 200000) -> np.ndarray:
         episode_rewards: List[float] = []
 
-        for _ in range(n_episodes_eval):
-            state = self._reset_state()
+        for ep in range(n_episodes_eval):
+            state = self._reset_state(seed=seed_offset + ep)
             total_reward = 0.0
 
             while True:
@@ -299,8 +294,6 @@ def run_budget_dqn(
     cfg: DQNConfig,
     log_every_n_episodes: int = 10,
 ):
-    random.seed(seed)
-    np.random.seed(seed)
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -313,6 +306,7 @@ def run_budget_dqn(
         initial_frontier_fn=initial_frontier_fn,
         budget_allocator=budget_allocator,
         cfg=cfg,
+        seed=seed,
     )
 
     best_eval_reward = -1.0
