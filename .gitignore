@@ -1,0 +1,5 @@
+.venv/
+__pycache__/
+checkpoints/
+ICPSR_22140/
+*.pyc
