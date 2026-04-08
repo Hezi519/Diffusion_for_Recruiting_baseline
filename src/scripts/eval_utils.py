@@ -31,9 +31,9 @@ def evaluate_recruiting_curve(
         gamma: Discount factor for computing discounted returns.
 
     Returns:
-        x: Mean cumulative budget fraction by round.
-        y: Mean cumulative recruit fraction by round.
-        y_std: Std of cumulative recruit fraction by round.
+        x: Mean cumulative budget spent by round.
+        y: Mean cumulative recruits by round.
+        y_std: Std of cumulative recruits by round.
         traj_rows: Per-round trajectory rows for CSV export.
         discounted_returns: Discounted returns per episode.
         total_rewards: Undiscounted total recruits per episode.
@@ -54,7 +54,7 @@ def evaluate_recruiting_curve(
         rewards_this_ep = []
 
         x_ep = []
-        y_ep_raw = []
+        y_ep = []
 
         while True:
             action_vec = policy_fn(state)
@@ -64,10 +64,8 @@ def evaluate_recruiting_curve(
             cumulative_budget_spent += float(info["budget_spent"])
             cumulative_recruits += float(reward)
 
-            x_ep.append(
-                cumulative_budget_spent / max(float(initial_budget), 1.0)
-            )
-            y_ep_raw.append(cumulative_recruits)
+            x_ep.append(cumulative_budget_spent)
+            y_ep.append(cumulative_recruits)
 
             traj_rows.append(
                 {
@@ -90,9 +88,6 @@ def evaluate_recruiting_curve(
             state = next_state
             if done:
                 break
-
-        total_final = max(cumulative_recruits, 1.0)
-        y_ep = [v / total_final for v in y_ep_raw]
 
         while len(x_ep) < horizon:
             x_ep.append(x_ep[-1] if len(x_ep) > 0 else 0.0)
@@ -148,16 +143,13 @@ def save_final_eval_results(
     plt.fill_between(
         x_plot,
         np.maximum(0.0, y_plot - y_std_plot),
-        np.minimum(1.0, y_plot + y_std_plot),
+        y_plot + y_std_plot,
         color="tab:blue",
         alpha=0.25,
     )
-    plt.axvline(x=0.5, linestyle=":", color="gray", alpha=0.7)
-    plt.xlabel("Fraction of budget spent")
-    plt.ylabel("Fraction of total recruits obtained (normalized)")
-    plt.title(f"Recruiting policy with discount = {gamma}")
-    plt.xlim(0.0, 1.0)
-    plt.ylim(0.0, 1.05)
+    plt.xlabel("Budget spent")
+    plt.ylabel("Cumulative recruits")
+    plt.title(f"Recruiting policy (discount = {gamma})")
     plt.legend()
     plt.tight_layout()
 
