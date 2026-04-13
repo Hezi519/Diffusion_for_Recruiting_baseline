@@ -5,10 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 from src.environment.state import RecruitingState
-from src.models.policy.abstract_policy import AbstractPolicy
 
 
-class RandomPolicy(AbstractPolicy):
+class RandomPolicy:
     """Randomly allocate budget across frontier members.
 
     Each round, spends up to budget_remaining by distributing
