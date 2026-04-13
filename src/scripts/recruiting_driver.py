@@ -194,6 +194,26 @@ def main():
     print("Train + Evaluate Budget-DQN on recruiting env")
     print("--------------------------------------------------------")
 
+    def on_new_best(learner, episode, reward):
+        def policy_fn(state):
+            budget = learner.select_action(state, greedy=True)
+            return learner.budget_allocator(state, budget)
+
+        tag = f"{run_tag}_best_ep{episode}"
+        x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
+            policy_fn=policy_fn,
+            env=env,
+            initial_frontier_fn=initial_frontier_fn,
+            n_episodes_eval=args.n_episodes_eval,
+            gamma=args.discount,
+        )
+        save_final_eval_results(
+            x, y, y_std, traj_rows,
+            args.results_dir, tag, args.discount,
+            label=f"DQN (ep {episode}, reward={reward:.1f})",
+        )
+        print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
+
     t0 = time.time()
 
     rewards, learner, best_eval_reward, best_eval_episode = run_budget_dqn(
@@ -204,6 +224,7 @@ def main():
         seed=args.seed,
         cfg=cfg,
         log_every_n_episodes=args.log_every,
+        on_new_best=on_new_best,
     )
 
     elapsed = time.time() - t0
