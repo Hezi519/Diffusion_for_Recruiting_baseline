@@ -207,6 +207,25 @@ def main():
         seed=args.seed,
     )
 
+    def on_new_best(policy_obj, episode, reward):
+        def policy_fn(state):
+            return policy_obj.act_greedy(state).allocation
+
+        tag = f"{run_tag}_best_ep{episode}"
+        x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
+            policy_fn=policy_fn,
+            env=env,
+            initial_frontier_fn=initial_frontier_fn,
+            n_episodes_eval=args.n_episodes_eval,
+            gamma=args.discount,
+        )
+        save_single_curve(
+            x, y, y_std, traj_rows,
+            args.results_dir, tag, args.discount,
+            label=f"Structured RL (ep {episode}, reward={reward:.1f})",
+        )
+        print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
+
     trainer = StructuredQTrainer(
         env=env,
         policy=policy,
@@ -216,6 +235,9 @@ def main():
         cfg=cfg,
         device=args.device,
         seed=args.seed,
+        on_new_best=on_new_best,
+        n_episodes_eval=args.n_episodes_eval,
+        log_every_n_episodes=args.log_every,
     )
 
     t0 = time.time()

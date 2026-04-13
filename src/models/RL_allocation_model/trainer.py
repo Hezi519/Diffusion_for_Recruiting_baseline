@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 import numpy as np
 import torch
@@ -64,6 +65,9 @@ class StructuredQTrainer:
         cfg: ValueTrainerConfig,
         device: str = "cpu",
         seed: int = 42,
+        on_new_best: Callable[[StructuredValuePolicy, int, float], None] | None = None,
+        n_episodes_eval: int = 10,
+        log_every_n_episodes: int = 10,
     ):
         self.env = env
         self.policy = policy
@@ -73,6 +77,9 @@ class StructuredQTrainer:
         self.cfg = cfg
         self.device = torch.device(device)
         self.rng = np.random.default_rng(seed)
+        self.on_new_best = on_new_best
+        self.n_episodes_eval = n_episodes_eval
+        self.log_every_n_episodes = log_every_n_episodes
 
         self.optimizer = torch.optim.Adam(
             list(self.policy.encoder.parameters()) + list(self.policy.q_network.parameters()),
@@ -442,14 +449,36 @@ class StructuredQTrainer:
             "num_updates": num_updates,
         }
 
+    @torch.no_grad()
+    def _evaluate_greedy(self, n_episodes: int) -> float:
+        """Run greedy rollouts and return mean episode return."""
+        self.policy.eval()
+        returns = []
+        for _ in range(max(1, n_episodes)):
+            state = self.env.reset(self.initial_frontier_fn())
+            total_reward = 0.0
+            step_count = 0
+            while True:
+                step = self.policy.act_greedy(state)
+                state, reward, done, _ = self.env.step(step.allocation)
+                total_reward += float(reward)
+                step_count += 1
+                if done or step_count >= self.cfg.max_steps_per_episode:
+                    break
+            returns.append(total_reward)
+        self.policy.train()
+        return float(np.mean(returns)) if returns else 0.0
+
     def train(self):
         history = []
+        best_eval_reward = -1.0
+        best_eval_episode = -1
 
         for ep in range(self.cfg.train_episodes):
             metrics = self.train_one_episode(ep)
             history.append(metrics)
 
-            if (ep + 1) % 10 == 0:
+            if (ep + 1) % self.log_every_n_episodes == 0:
                 print(
                     f"[Episode {ep+1}] "
                     f"Return={metrics['episode_return']:.2f}, "
@@ -458,5 +487,15 @@ class StructuredQTrainer:
                     f"Buffer={metrics['buffer_size']}, "
                     f"Updates={metrics['num_updates']}"
                 )
+
+                mean_eval_reward = self._evaluate_greedy(
+                    n_episodes=max(1, self.n_episodes_eval // 2),
+                )
+
+                if mean_eval_reward > best_eval_reward:
+                    best_eval_reward = mean_eval_reward
+                    best_eval_episode = ep + 1
+                    if self.on_new_best is not None:
+                        self.on_new_best(self.policy, ep + 1, mean_eval_reward)
 
         return history
