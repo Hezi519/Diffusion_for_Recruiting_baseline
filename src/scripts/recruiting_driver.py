@@ -42,7 +42,7 @@ from src.models.RL_model.dqn_estimator import (
     run_budget_dqn,
 )
 from src.models.RL_model.greedy_allocator import greedy_allocator
-from src.scripts.eval_utils import evaluate_recruiting_curve, save_final_eval_results
+from src.scripts.eval_utils import evaluate_recruiting_curve, save_single_curve
 
 
 # ------------------------------------------------------------------
@@ -207,7 +207,7 @@ def main():
             n_episodes_eval=args.n_episodes_eval,
             gamma=args.discount,
         )
-        save_final_eval_results(
+        save_single_curve(
             x, y, y_std, traj_rows,
             args.results_dir, tag, args.discount,
             label=f"DQN (ep {episode}, reward={reward:.1f})",
@@ -243,7 +243,7 @@ def main():
         gamma=args.discount,
     )
 
-    save_final_eval_results(
+    save_single_curve(
         x=x,
         y=y,
         y_std=y_std,

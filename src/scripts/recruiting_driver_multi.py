@@ -1,20 +1,16 @@
 from __future__ import annotations
 
 import argparse
-import os
 import time
 import random
 from dataclasses import dataclass
-from typing import Callable, Literal
+from typing import Callable
 
-import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 import torch
 
 from src.data.icpsr_loader import ICPSRGraphData
 from src.environment.recruiting_env import RecruitingEnv
-from src.environment.state import RecruitingState
 from src.models.count_model.gaussian_count_model import GaussianCountModel
 from src.models.covariate_model.ddpm_covariate_model import DDPMCovariateModel
 from src.models.RL_model.dqn_estimator import DQNConfig, run_budget_dqn
@@ -23,6 +19,7 @@ from src.models.RL_allocation_model.state_encoder import StateEncoder
 from src.models.RL_allocation_model.q_network import ThreeHeadQNetwork
 from src.models.RL_allocation_model.policy import StructuredValuePolicy
 from src.models.RL_allocation_model.trainer import ValueTrainerConfig, StructuredQTrainer
+from src.scripts.eval_utils import evaluate_recruiting_curve, save_comparison_curves
 
 
 # ------------------------------------------------------------------
@@ -39,6 +36,7 @@ def reseed_all(seed: int) -> None:
 
 @dataclass
 class EvalBundle:
+    """Thin wrapper around the tuple returned by eval_utils.evaluate_recruiting_curve."""
     method: str
     x: np.ndarray
     y: np.ndarray
@@ -46,14 +44,6 @@ class EvalBundle:
     traj_rows: list[dict]
     discounted_returns: np.ndarray
     total_rewards: np.ndarray
-
-
-class StructuredLearnerWrapper:
-    """Light wrapper so evaluation code can treat both learners uniformly."""
-
-    def __init__(self, policy: StructuredValuePolicy, trainer: StructuredQTrainer) -> None:
-        self.policy = policy
-        self.trainer = trainer
 
 
 def make_initial_frontier_fn(
@@ -72,17 +62,6 @@ def make_initial_frontier_fn(
     return _fn
 
 
-def get_eval_frontier(
-    graph_data: ICPSRGraphData,
-    initial_frontier_size: int,
-    eval_seed: int,
-) -> np.ndarray:
-    return graph_data.sample_initial_frontier(
-        n=initial_frontier_size,
-        seed=eval_seed,
-    )
-
-
 # ------------------------------------------------------------------
 # Training wrappers
 # ------------------------------------------------------------------
@@ -94,6 +73,7 @@ def train_budget_dqn_baseline(
     seed: int,
     cfg: DQNConfig,
     log_every_n_episodes: int,
+    on_new_best=None,
 ):
     rewards, learner, best_eval_reward, best_eval_episode = run_budget_dqn(
         env=env,
@@ -103,6 +83,7 @@ def train_budget_dqn_baseline(
         seed=seed,
         cfg=cfg,
         log_every_n_episodes=log_every_n_episodes,
+        on_new_best=on_new_best,
     )
     return {
         "learner": learner,
@@ -147,202 +128,12 @@ def train_structured_allocation_baseline(
     )
     history = trainer.train()
     policy.eval()
+    # TODO: plumb on_new_best through StructuredQTrainer for parity with run_budget_dqn.
     return {
-        "learner": StructuredLearnerWrapper(policy=policy, trainer=trainer),
+        "policy": policy,
+        "trainer": trainer,
         "history": history,
     }
-
-
-# ------------------------------------------------------------------
-# Evaluation
-# ------------------------------------------------------------------
-
-def evaluate_recruiting_curve(
-    method: Literal["dqn", "structured"],
-    learner,
-    env: RecruitingEnv,
-    graph_data: ICPSRGraphData,
-    initial_frontier_size: int,
-    n_episodes_eval: int,
-    gamma: float,
-    eval_seed_base: int = 100000,
-) -> EvalBundle:
-    """
-    Evaluate a trained policy and produce the normalized recruiting curve.
-
-    x-axis: fraction of budget spent
-    y-axis: fraction of total recruits obtained within that episode
-    """
-    horizon = env.max_rounds
-    initial_budget = env.initial_budget
-
-    x_mat = []
-    y_mat = []
-    discounted_returns = []
-    total_rewards = []
-    traj_rows: list[dict] = []
-
-    for ep in range(n_episodes_eval):
-        frontier_seed = eval_seed_base + ep
-        env_seed = eval_seed_base + 10_000 + ep
-        state = env.reset(
-            get_eval_frontier(graph_data, initial_frontier_size, frontier_seed),
-            seed=env_seed,
-        )
-
-        cumulative_budget_spent = 0.0
-        cumulative_recruits = 0.0
-        rewards_this_ep = []
-        x_ep = []
-        y_ep_raw = []
-
-        while True:
-            if method == "dqn":
-                action_budget = learner.select_action(state, greedy=True)
-                action_vec = learner.budget_allocator(state, action_budget)
-                action_k = None
-            else:
-                step = learner.policy.act_greedy(state)
-                action_budget = int(step.budget)
-                action_k = int(step.k)
-                action_vec = step.allocation
-
-            next_state, reward, done, info = env.step(action_vec)
-
-            rewards_this_ep.append(float(reward))
-            cumulative_budget_spent += float(info["budget_spent"])
-            cumulative_recruits += float(reward)
-
-            x_ep.append(cumulative_budget_spent / max(float(initial_budget), 1.0))
-            y_ep_raw.append(cumulative_recruits)
-
-            row = {
-                "method": method,
-                "episode": ep,
-                "round": info["round"],
-                "frontier_size": int(state.frontier_size),
-                "budget_remaining_before": int(state.budget_remaining),
-                "action_budget": int(action_budget),
-                "budget_spent": int(info["budget_spent"]),
-                "cumulative_budget_spent": float(cumulative_budget_spent),
-                "budget_fraction": float(cumulative_budget_spent / max(float(initial_budget), 1.0)),
-                "reward": float(reward),
-                "cumulative_recruits": float(cumulative_recruits),
-                "next_frontier_size": int(next_state.frontier_size),
-                "termination_reason": info["termination_reason"],
-            }
-            if action_k is not None:
-                row["action_k"] = action_k
-                row["allocation_nonzero"] = int(np.count_nonzero(action_vec))
-            traj_rows.append(row)
-
-            state = next_state
-            if done:
-                break
-
-        total_final = max(cumulative_recruits, 1.0)
-        y_ep = [v / total_final for v in y_ep_raw]
-
-        while len(x_ep) < horizon:
-            x_ep.append(x_ep[-1] if x_ep else 0.0)
-            y_ep.append(y_ep[-1] if y_ep else 0.0)
-
-        x_ep = np.asarray(x_ep[:horizon], dtype=np.float32)
-        y_ep = np.asarray(y_ep[:horizon], dtype=np.float32)
-
-        x_mat.append(x_ep)
-        y_mat.append(y_ep)
-
-        discounts = gamma ** np.arange(len(rewards_this_ep))
-        discounted_returns.append(float(np.sum(np.asarray(rewards_this_ep) * discounts)))
-        total_rewards.append(float(np.sum(rewards_this_ep)))
-
-    x = np.mean(np.asarray(x_mat, dtype=np.float32), axis=0)
-    y = np.mean(np.asarray(y_mat, dtype=np.float32), axis=0)
-    y_std = np.std(np.asarray(y_mat, dtype=np.float32), axis=0)
-
-    return EvalBundle(
-        method=method,
-        x=x,
-        y=y,
-        y_std=y_std,
-        traj_rows=traj_rows,
-        discounted_returns=np.asarray(discounted_returns, dtype=float),
-        total_rewards=np.asarray(total_rewards, dtype=float),
-    )
-
-
-# ------------------------------------------------------------------
-# Saving / plotting
-# ------------------------------------------------------------------
-
-def _method_label(method: str) -> str:
-    if method == "dqn":
-        return "Budget-DQN + GreedyAlloc"
-    if method == "structured":
-        return "Three-Head Structured RL"
-    return method
-
-
-def save_eval_results(
-    bundles: dict[str, EvalBundle],
-    results_dir: str,
-    run_tag: str,
-    gamma: float,
-) -> None:
-    os.makedirs(results_dir, exist_ok=True)
-
-    # Save per-method arrays and trajectories
-    for method, bundle in bundles.items():
-        npz_path = os.path.join(results_dir, f"eval_results_{run_tag}_{method}.npz")
-        np.savez(npz_path, x=bundle.x, y=bundle.y, y_std=bundle.y_std)
-        print(f"Saved eval vectors to: {npz_path}")
-
-        traj_path = os.path.join(results_dir, f"trajectories_{run_tag}_{method}.csv")
-        pd.DataFrame(bundle.traj_rows).to_csv(traj_path, index=False)
-        print(f"Saved trajectories to: {traj_path}")
-
-    # Save combined trajectories too
-    combined_rows = []
-    for bundle in bundles.values():
-        combined_rows.extend(bundle.traj_rows)
-    combined_path = os.path.join(results_dir, f"trajectories_{run_tag}_all_methods.csv")
-    pd.DataFrame(combined_rows).to_csv(combined_path, index=False)
-    print(f"Saved combined trajectories to: {combined_path}")
-
-    # Plot single or multiple curves on one figure
-    plt.figure(figsize=(8, 4))
-    for method, bundle in bundles.items():
-        x_plot = np.concatenate([[0.0], bundle.x])
-        y_plot = np.concatenate([[0.0], bundle.y])
-        y_std_plot = np.concatenate([[0.0], bundle.y_std])
-        label = _method_label(method)
-        plt.plot(x_plot, y_plot, linestyle="-", label=label)
-        plt.fill_between(
-            x_plot,
-            np.maximum(0.0, y_plot - y_std_plot),
-            np.minimum(1.0, y_plot + y_std_plot),
-            alpha=0.20,
-        )
-
-    plt.axvline(x=0.5, linestyle=":", color="gray", alpha=0.7)
-    plt.xlabel("Fraction of budget spent")
-    plt.ylabel("Fraction of total recruits obtained (normalized)")
-    plt.title(f"Recruiting policies with discount = {gamma}")
-    plt.xlim(0.0, 1.0)
-    plt.ylim(0.0, 1.05)
-    plt.legend()
-    plt.tight_layout()
-
-    plot_name = (
-        f"recruiting_curve_{run_tag}.png"
-        if len(bundles) == 1
-        else f"recruiting_curve_{run_tag}_comparison.png"
-    )
-    png_path = os.path.join(results_dir, plot_name)
-    plt.savefig(png_path, dpi=200)
-    plt.close()
-    print(f"Saved plot to: {png_path}")
 
 
 # ------------------------------------------------------------------
@@ -522,6 +313,32 @@ def main() -> None:
     results: dict[str, dict] = {}
     eval_bundles: dict[str, EvalBundle] = {}
 
+    eval_frontier_fn = make_initial_frontier_fn(
+        graph_data=graph_data,
+        initial_frontier_size=args.initial_frontier_size,
+        base_seed=args.seed + 500,
+    )
+
+    def _run_eval(method: str, policy_fn, env_eval: RecruitingEnv) -> EvalBundle:
+        (x, y, y_std, traj_rows,
+         discounted_returns, total_rewards) = evaluate_recruiting_curve(
+            policy_fn=policy_fn,
+            env=env_eval,
+            initial_frontier_fn=eval_frontier_fn,
+            n_episodes_eval=args.n_episodes_eval,
+            gamma=args.discount,
+            normalize=True,
+        )
+        return EvalBundle(
+            method=method,
+            x=x,
+            y=y,
+            y_std=y_std,
+            traj_rows=traj_rows,
+            discounted_returns=discounted_returns,
+            total_rewards=total_rewards,
+        )
+
     if args.method in {"dqn", "both"}:
         print("[Run] Budget-DQN + GreedyAlloc")
         env_dqn = build_env(seed_offset=0)
@@ -541,16 +358,16 @@ def main() -> None:
         )
         results["dqn"]["elapsed"] = time.time() - t0
 
+        dqn_learner = results["dqn"]["learner"]
+
+        def dqn_policy_fn(state):
+            return dqn_learner.budget_allocator(
+                state,
+                dqn_learner.select_action(state, greedy=True),
+            )
+
         eval_env_dqn = build_env(seed_offset=1000)
-        eval_bundles["dqn"] = evaluate_recruiting_curve(
-            method="dqn",
-            learner=results["dqn"]["learner"],
-            env=eval_env_dqn,
-            graph_data=graph_data,
-            initial_frontier_size=args.initial_frontier_size,
-            n_episodes_eval=args.n_episodes_eval,
-            gamma=args.discount,
-        )
+        eval_bundles["dqn"] = _run_eval("dqn", dqn_policy_fn, eval_env_dqn)
 
     if args.method in {"structured", "both"}:
         print("[Run] Three-Head Structured RL")
@@ -572,19 +389,17 @@ def main() -> None:
         )
         results["structured"]["elapsed"] = time.time() - t0
 
+        structured_policy = results["structured"]["policy"]
+
+        def structured_policy_fn(state):
+            return structured_policy.act_greedy(state).allocation
+
         eval_env_structured = build_env(seed_offset=3000)
-        eval_bundles["structured"] = evaluate_recruiting_curve(
-            method="structured",
-            learner=results["structured"]["learner"],
-            env=eval_env_structured,
-            graph_data=graph_data,
-            initial_frontier_size=args.initial_frontier_size,
-            n_episodes_eval=args.n_episodes_eval,
-            gamma=args.discount,
+        eval_bundles["structured"] = _run_eval(
+            "structured", structured_policy_fn, eval_env_structured
         )
 
-    os.makedirs(args.results_dir, exist_ok=True)
-    save_eval_results(
+    save_comparison_curves(
         bundles=eval_bundles,
         results_dir=args.results_dir,
         run_tag=run_tag,
@@ -599,13 +414,18 @@ def main() -> None:
         f"init_frontier={args.initial_frontier_size}, discount={args.discount}"
     )
 
+    method_labels = {
+        "dqn": "Budget-DQN + GreedyAlloc",
+        "structured": "Three-Head Structured RL",
+    }
+
     for method, bundle in eval_bundles.items():
         mean_total_reward = float(np.mean(bundle.total_rewards)) if bundle.total_rewards.size > 0 else 0.0
         std_total_reward = float(np.std(bundle.total_rewards)) if bundle.total_rewards.size > 0 else 0.0
         mean_disc = float(np.mean(bundle.discounted_returns)) if bundle.discounted_returns.size > 0 else 0.0
         std_disc = float(np.std(bundle.discounted_returns)) if bundle.discounted_returns.size > 0 else 0.0
 
-        print(f"  [{_method_label(method)}]")
+        print(f"  [{method_labels.get(method, method)}]")
         print(
             f"    eval episodes: {args.n_episodes_eval}, "
             f"mean total recruits = {mean_total_reward:.4f}, std = {std_total_reward:.4f}"
