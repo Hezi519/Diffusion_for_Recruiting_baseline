@@ -65,7 +65,7 @@ class StructuredQTrainer:
         cfg: ValueTrainerConfig,
         device: str = "cpu",
         seed: int = 42,
-        on_new_best: Callable[[StructuredValuePolicy, int, float], None] | None = None,
+        on_eval_log: Callable[[StructuredValuePolicy, int, float], None] | None = None,
         n_episodes_eval: int = 10,
         log_every_n_episodes: int = 10,
     ):
@@ -77,7 +77,7 @@ class StructuredQTrainer:
         self.cfg = cfg
         self.device = torch.device(device)
         self.rng = np.random.default_rng(seed)
-        self.on_new_best = on_new_best
+        self.on_eval_log = on_eval_log
         self.n_episodes_eval = n_episodes_eval
         self.log_every_n_episodes = log_every_n_episodes
 
@@ -508,7 +508,12 @@ class StructuredQTrainer:
                 if mean_eval_reward > best_eval_reward:
                     best_eval_reward = mean_eval_reward
                     best_eval_episode = ep + 1
-                    if self.on_new_best is not None:
-                        self.on_new_best(self.policy, ep + 1, mean_eval_reward)
 
-        return history
+                if self.on_eval_log is not None:
+                    self.on_eval_log(self.policy, ep + 1, mean_eval_reward)
+
+        return {
+            "history": history,
+            "best_eval_reward": best_eval_reward,
+            "best_eval_episode": best_eval_episode,
+        }

@@ -207,11 +207,12 @@ def main():
         seed=args.seed,
     )
 
-    def on_new_best(policy_obj, episode, reward):
+    best_reward_so_far = [-1.0]
+
+    def on_eval_log(policy_obj, episode, reward):
         def policy_fn(state):
             return policy_obj.act_greedy(state).allocation
 
-        tag = f"{run_tag}_best_ep{episode}"
         x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
             policy_fn=policy_fn,
             env=env,
@@ -219,12 +220,26 @@ def main():
             n_episodes_eval=args.n_episodes_eval,
             gamma=args.discount,
         )
+
+        periodic_tag = f"{run_tag}_ep{episode}"
         save_single_curve(
             x, y, y_std, traj_rows,
-            args.results_dir, tag, args.discount,
+            args.results_dir, periodic_tag, args.discount,
             label=f"Structured RL (ep {episode}, reward={reward:.1f})",
         )
-        print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
+
+        is_new_best = reward > best_reward_so_far[0]
+        if is_new_best:
+            best_reward_so_far[0] = reward
+            best_tag = f"{run_tag}_best_ep{episode}"
+            save_single_curve(
+                x, y, y_std, traj_rows,
+                args.results_dir, best_tag, args.discount,
+                label=f"Structured RL best (ep {episode}, reward={reward:.1f})",
+            )
+            print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
+        else:
+            print(f"  [eval] ep={episode}, mean_reward={reward:.1f}")
 
     trainer = StructuredQTrainer(
         env=env,
@@ -235,13 +250,16 @@ def main():
         cfg=cfg,
         device=args.device,
         seed=args.seed,
-        on_new_best=on_new_best,
+        on_eval_log=on_eval_log,
         n_episodes_eval=args.n_episodes_eval,
         log_every_n_episodes=args.log_every,
     )
 
     t0 = time.time()
-    history = trainer.train()
+    train_result = trainer.train()
+    history = train_result["history"]
+    best_eval_reward = train_result["best_eval_reward"]
+    best_eval_episode = train_result["best_eval_episode"]
     policy.eval()
     elapsed = time.time() - t0
 
@@ -298,6 +316,12 @@ def main():
     print(
         f"  mean discounted return = {mean_disc:.4f}, std = {std_disc:.4f}"
     )
+    if best_eval_episode > 0:
+        best_loss = history[best_eval_episode - 1]["avg_loss"]
+        print(
+            f"  best eval reward = {best_eval_reward:.4f} "
+            f"at episode {best_eval_episode}, avg loss at that episode = {best_loss:.4f}"
+        )
     if history:
         last = history[-1]
         print(
