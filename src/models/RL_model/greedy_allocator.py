@@ -22,13 +22,10 @@ def greedy_allocator(state, spend_budget: int, count_model) -> np.ndarray:
     if n == 0 or spend_budget <= 0:
         return alloc
 
-    # 逐单位 budget greedy 分配
     for _ in range(spend_budget):
 
-        # 当前 allocation 下的 expected counts
         counts_now = count_model.predict(frontier, alloc)
 
-        # 尝试每个人 +1 budget 的效果
         scores = np.zeros(n)
 
         for i in range(n):
