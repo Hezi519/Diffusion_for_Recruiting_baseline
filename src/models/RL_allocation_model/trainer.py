@@ -185,58 +185,74 @@ class StructuredQTrainer:
         )
         return state_vec, frontier_covariates
 
-    def _counterfactual_one_unit_transition(
+    def _batched_counterfactual_transitions(
         self,
         state: RecruitingState,
-        node_idx: int,
-    ) -> tuple[float, np.ndarray, int]:
+    ) -> list[tuple[float, np.ndarray, int]]:
         """
-        Simulate one-step transition if we allocate exactly 1 unit to node_idx.
+        For every node i in the frontier, simulate the one-step transition
+        where we allocate exactly 1 unit to node i. Returns a list of
+        (immediate_gain_i, next_frontier_i, new_budget_i), one per node.
 
-        Uses multiple stochastic samples from the covariate model and averages
-        the immediate gain. For the continuation state, we keep one sampled
-        next_frontier (the last one) as an approximation.
+        Single batched diffusion call across all nodes, instead of n separate
+        calls. Still supports averaging over node_target_num_samples stochastic
+        samples per node.
         """
         n = state.frontier_size
-        alloc = np.zeros(n, dtype=int)
-        alloc[node_idx] = 1
-
-        counts = self.count_model.predict(state.frontier_covariates, alloc)
-        counts = np.asarray(counts, dtype=int)
-
-        sampled_gains = []
-        sampled_frontiers = []
-
+        cov_dim = state.frontier_covariates.shape[1]
+        new_budget = state.budget_remaining - 1
         num_samples = max(1, int(self.cfg.node_target_num_samples))
 
+        # Per-node child counts under "1 unit to node i": since only node i has
+        # non-zero allocation, count_model.predict({1 at i, 0 elsewhere}) gives
+        # counts[j] = 0 for j != i. Under that allocation-clipping contract, the
+        # child count for node i is the same as what count_model.predict would
+        # return at that single node with allocation=1. Compute it n times.
+        per_node_counts = np.zeros(n, dtype=int)
+        for i in range(n):
+            alloc_i = np.zeros(n, dtype=int)
+            alloc_i[i] = 1
+            counts_i = self.count_model.predict(state.frontier_covariates, alloc_i)
+            per_node_counts[i] = int(counts_i[i])
+
+        gains_per_node = np.zeros(n, dtype=np.float64)
+        last_frontiers: list[np.ndarray] = [
+            np.empty((0, cov_dim), dtype=np.float64) for _ in range(n)
+        ]
+
         for _ in range(num_samples):
-            new_covariates = []
+            parent_rows = []
+            owner_node = []
             for i in range(n):
-                m_i = int(counts[i])
+                m_i = int(per_node_counts[i])
                 if m_i > 0:
-                    parent_cov = np.tile(state.frontier_covariates[i], (m_i, 1))
-                    children = self.covariate_model.sample(
-                        parent_cov,
-                        seed=int(self.rng.integers(1 << 31)),
+                    parent_rows.append(
+                        np.tile(state.frontier_covariates[i], (m_i, 1))
                     )
-                    new_covariates.append(children)
+                    owner_node.extend([i] * m_i)
 
-            if new_covariates:
-                next_frontier = np.concatenate(new_covariates, axis=0)
-            else:
-                next_frontier = np.empty(
-                    (0, state.frontier_covariates.shape[1]),
-                    dtype=np.float64,
+            if parent_rows:
+                all_parents = np.concatenate(parent_rows, axis=0)
+                all_children = self.covariate_model.sample(
+                    all_parents,
+                    seed=int(self.rng.integers(1 << 31)),
                 )
+                owner_node_arr = np.asarray(owner_node, dtype=int)
+                for i in range(n):
+                    mask = owner_node_arr == i
+                    frontier_i = all_children[mask] if mask.any() else np.empty(
+                        (0, cov_dim), dtype=np.float64
+                    )
+                    gains_per_node[i] += float(frontier_i.shape[0])
+                    last_frontiers[i] = frontier_i
+            # nodes with m_i == 0 stay at gain 0 and empty frontier
 
-            sampled_frontiers.append(next_frontier)
-            sampled_gains.append(float(next_frontier.shape[0]))
+        gains_per_node /= float(num_samples)
 
-        immediate_gain = float(np.mean(sampled_gains))
-        representative_next_frontier = sampled_frontiers[-1]
-        new_budget = state.budget_remaining - 1
-
-        return immediate_gain, representative_next_frontier, new_budget
+        return [
+            (float(gains_per_node[i]), last_frontiers[i], new_budget)
+            for i in range(n)
+        ]
 
     def _compute_loss_on_transition(
         self,
@@ -333,12 +349,9 @@ class StructuredQTrainer:
         targets = []
 
         with torch.no_grad():
-            for i in range(n):
-                immediate_gain_i, next_frontier_i, new_budget_i = self._counterfactual_one_unit_transition(
-                    state=state,
-                    node_idx=i,
-                )
+            counterfactuals = self._batched_counterfactual_transitions(state)
 
+            for immediate_gain_i, next_frontier_i, new_budget_i in counterfactuals:
                 next_state_vec_i, next_frontier_tensor_i = self._encode_counterfactual_state_target(
                     state=state,
                     next_frontier=next_frontier_i,
