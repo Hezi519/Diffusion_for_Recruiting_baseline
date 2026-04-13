@@ -293,6 +293,7 @@ def run_budget_dqn(
     seed: int,
     cfg: DQNConfig,
     log_every_n_episodes: int = 10,
+    on_new_best: Callable[["BudgetDQNSolver", int, float], None] | None = None,
 ):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
@@ -325,6 +326,8 @@ def run_budget_dqn(
             if mean_eval_reward > best_eval_reward:
                 best_eval_reward = mean_eval_reward
                 best_eval_episode = ep + 1
+                if on_new_best is not None:
+                    on_new_best(learner, ep + 1, mean_eval_reward)
 
     rewards = learner.evaluate(n_episodes_eval=n_episodes_eval)
 

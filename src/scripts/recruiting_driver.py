@@ -29,11 +29,8 @@ import argparse
 import os
 import time
 import random
-from pathlib import Path
 
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import torch
 
 from src.data.icpsr_loader import ICPSRGraphData
@@ -45,6 +42,7 @@ from src.models.RL_model.dqn_estimator import (
     run_budget_dqn,
 )
 from src.models.RL_model.greedy_allocator import greedy_allocator
+from src.scripts.eval_utils import evaluate_recruiting_curve, save_final_eval_results
 
 
 # ------------------------------------------------------------------
@@ -58,159 +56,6 @@ def reseed_all(seed: int) -> None:
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
-
-
-def save_final_eval_results(
-    x: np.ndarray,
-    y: np.ndarray,
-    y_std: np.ndarray,
-    traj_rows: list[dict],
-    results_dir: str,
-    run_tag: str,
-    gamma: float,
-) -> None:
-    """Save final evaluation results: NPZ, CSV, and PNG."""
-    os.makedirs(results_dir, exist_ok=True)
-
-    npz_path = f"{results_dir}/eval_results_{run_tag}.npz"
-    np.savez(npz_path, x=x, y=y, y_std=y_std)
-    print("Saved eval vectors to:", npz_path)
-
-    traj_path = f"{results_dir}/trajectories_{run_tag}.csv"
-    pd.DataFrame(traj_rows).to_csv(traj_path, index=False)
-    print("Saved trajectories to:", traj_path)
-
-    # Add (0, 0) as the starting point
-    x_plot = np.concatenate([[0.0], x])
-    y_plot = np.concatenate([[0.0], y])
-    y_std_plot = np.concatenate([[0.0], y_std])
-
-    plt.figure(figsize=(8, 4))
-    plt.plot(x_plot, y_plot, linestyle="-", color="tab:blue", label="Budget-DQN + GreedyAlloc")
-    plt.fill_between(
-        x_plot,
-        np.maximum(0.0, y_plot - y_std_plot),
-        np.minimum(1.0, y_plot + y_std_plot),
-        color="tab:blue",
-        alpha=0.25,
-    )
-    plt.axvline(x=0.5, linestyle=":", color="gray", alpha=0.7)
-    plt.xlabel("Fraction of budget spent")
-    plt.ylabel("Fraction of total recruits obtained (normalized)")
-    plt.title(f"Recruiting policies with discount = {gamma}")
-    plt.xlim(0.0, 1.0)
-    plt.ylim(0.0, 1.05)
-    plt.legend()
-    plt.tight_layout()
-
-    png_path = f"{results_dir}/recruiting_curve_{run_tag}.png"
-    plt.savefig(png_path, dpi=200)
-    print("Saved plot to:", png_path)
-    plt.close()
-
-
-# ------------------------------------------------------------------
-# Evaluation
-# ------------------------------------------------------------------
-
-def evaluate_recruiting_curve(
-    learner,
-    env: RecruitingEnv,
-    initial_frontier_fn,
-    n_episodes_eval: int,
-    gamma: float,
-):
-    """
-    Evaluate the trained policy and produce a curve analogous to the disease driver.
-
-    Returns:
-        x: mean cumulative budget fraction by round
-        y: mean cumulative recruit fraction by round
-        y_std: std of cumulative recruit fraction by round
-        traj_rows: per-round trajectory rows for CSV
-        discounted_returns: discounted returns for each evaluation episode
-        total_rewards: undiscounted total recruits for each evaluation episode
-    """
-    horizon = env.max_rounds
-    initial_budget = env.initial_budget
-
-    x_mat = []
-    y_mat = []
-    discounted_returns = []
-    total_rewards = []
-    traj_rows = []
-
-    for ep in range(n_episodes_eval):
-        state = env.reset(initial_frontier_fn(), seed=100000 + ep)
-        cumulative_budget_spent = 0.0
-        cumulative_recruits = 0.0
-        rewards_this_ep = []
-
-        x_ep = []
-        y_ep_raw = []
-
-        while True:
-            action_budget = learner.select_action(state, greedy=True)
-            action_vec = learner.budget_allocator(state, action_budget)
-
-            next_state, reward, done, info = env.step(action_vec)
-
-            rewards_this_ep.append(float(reward))
-            cumulative_budget_spent += float(info["budget_spent"])
-            cumulative_recruits += float(reward)
-
-            x_ep.append(
-                cumulative_budget_spent / max(float(initial_budget), 1.0)
-            )
-            y_ep_raw.append(cumulative_recruits)
-
-            traj_rows.append(
-                {
-                    "episode": ep,
-                    "round": info["round"],
-                    "frontier_size": int(state.frontier_size),
-                    "budget_remaining_before": int(state.budget_remaining),
-                    "action_budget": int(action_budget),
-                    "budget_spent": int(info["budget_spent"]),
-                    "cumulative_budget_spent": float(cumulative_budget_spent),
-                    "budget_fraction": float(cumulative_budget_spent / max(float(initial_budget), 1.0)),
-                    "reward": float(reward),
-                    "cumulative_recruits": float(cumulative_recruits),
-                    "next_frontier_size": int(next_state.frontier_size),
-                    "termination_reason": info["termination_reason"],
-                }
-            )
-
-            state = next_state
-            if done:
-                break
-
-        total_final = max(cumulative_recruits, 1.0)
-        y_ep = [v / total_final for v in y_ep_raw]
-
-        # pad to horizon
-        while len(x_ep) < horizon:
-            x_ep.append(x_ep[-1] if len(x_ep) > 0 else 0.0)
-            y_ep.append(y_ep[-1] if len(y_ep) > 0 else 0.0)
-
-        x_ep = np.asarray(x_ep[:horizon], dtype=np.float32)
-        y_ep = np.asarray(y_ep[:horizon], dtype=np.float32)
-
-        x_mat.append(x_ep)
-        y_mat.append(y_ep)
-
-        discounts = gamma ** np.arange(len(rewards_this_ep))
-        discounted_returns.append(float(np.sum(np.asarray(rewards_this_ep) * discounts)))
-        total_rewards.append(float(np.sum(rewards_this_ep)))
-
-    x_mat = np.asarray(x_mat, dtype=np.float32)
-    y_mat = np.asarray(y_mat, dtype=np.float32)
-
-    x = np.mean(x_mat, axis=0)
-    y = np.mean(y_mat, axis=0)
-    y_std = np.std(y_mat, axis=0)
-
-    return x, y, y_std, traj_rows, np.asarray(discounted_returns), np.asarray(total_rewards)
 
 
 # ------------------------------------------------------------------
@@ -349,6 +194,26 @@ def main():
     print("Train + Evaluate Budget-DQN on recruiting env")
     print("--------------------------------------------------------")
 
+    def on_new_best(learner, episode, reward):
+        def policy_fn(state):
+            budget = learner.select_action(state, greedy=True)
+            return learner.budget_allocator(state, budget)
+
+        tag = f"{run_tag}_best_ep{episode}"
+        x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
+            policy_fn=policy_fn,
+            env=env,
+            initial_frontier_fn=initial_frontier_fn,
+            n_episodes_eval=args.n_episodes_eval,
+            gamma=args.discount,
+        )
+        save_final_eval_results(
+            x, y, y_std, traj_rows,
+            args.results_dir, tag, args.discount,
+            label=f"DQN (ep {episode}, reward={reward:.1f})",
+        )
+        print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
+
     t0 = time.time()
 
     rewards, learner, best_eval_reward, best_eval_episode = run_budget_dqn(
@@ -359,14 +224,19 @@ def main():
         seed=args.seed,
         cfg=cfg,
         log_every_n_episodes=args.log_every,
+        on_new_best=on_new_best,
     )
 
     elapsed = time.time() - t0
 
     os.makedirs(args.results_dir, exist_ok=True)
 
+    def dqn_policy_fn(state):
+        budget = learner.select_action(state, greedy=True)
+        return learner.budget_allocator(state, budget)
+
     x, y, y_std, traj_rows, discounted_returns_eval, total_rewards_eval = evaluate_recruiting_curve(
-        learner=learner,
+        policy_fn=dqn_policy_fn,
         env=env,
         initial_frontier_fn=initial_frontier_fn,
         n_episodes_eval=args.n_episodes_eval,
@@ -381,6 +251,7 @@ def main():
         results_dir=args.results_dir,
         run_tag=run_tag,
         gamma=args.discount,
+        label="Budget-DQN + GreedyAlloc",
     )
 
     rewards = np.asarray(rewards, dtype=float)
