@@ -17,9 +17,9 @@ Instead of directly learning over a combinatorial action space, we factorize the
    ```
 
 3. **Node-level scoring**
-   $$
+   ```math
    s_i = Q_{\text{node}}(s_t, x_i)
-   $$
+   ```
 
 These are combined into a final allocation using a deterministic builder.
 
@@ -31,20 +31,20 @@ The state is encoded using a **DeepSets-style encoder**:
 
 - Node embedding:
 
-  $$
+  ```math
   h_i = \phi(x_i)
-  $$
+  ```
 
 - Mean pooling:
 
-  $$
+  ```math
   h_{\text{pool}} = \frac{1}{n_t} \sum_{i=1}^{n_t} h_i
-  $$
+  ```
 
 - Final state vector:
-  $$
+  ```math
   s_t = \big[h_{\text{pool}},\ n_t,\ B_t,\ t\big]
-  $$
+  ```
 
 This produces a fixed-dimensional representation regardless of frontier size.
 
