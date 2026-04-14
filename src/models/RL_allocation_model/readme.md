@@ -12,9 +12,9 @@ Instead of directly learning over a combinatorial action space, we factorize the
 
 2. **Support size (top-k selection)**
 
-   $
+   ```
    k_t \sim Q_k(s_t)
-   $
+   ```
 
 3. **Node-level scoring**
    $$
