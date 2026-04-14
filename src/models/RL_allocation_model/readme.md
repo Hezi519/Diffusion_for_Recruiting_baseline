@@ -12,7 +12,7 @@ Instead of directly learning over a combinatorial action space, we factorize the
 
 2. **Support size (top-k selection)**
 
-   ```
+   ```math
    k_t \sim Q_k(s_t)
    ```
 
