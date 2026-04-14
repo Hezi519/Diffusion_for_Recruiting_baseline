@@ -83,15 +83,15 @@ Given $b_t$, $k_t$, and node scores:
 1. Select top-$k$ nodes by score
 2. Apply softmax within selected nodes:
 
-   ```math
+   $$
    w_i = \frac{\exp(s_i)}{\sum_{j \in \text{top-}k} \exp(s_j)}
-   ```
+   $$
 
 3. Allocate budget proportionally:
 
-   ```math
+   $$
    \tilde{a}_i = b_t \cdot w_i
-   ```
+   $$
 
 4. Convert to integers using **largest-remainder rounding**
 
