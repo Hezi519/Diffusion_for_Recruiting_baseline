@@ -1,26 +1,19 @@
 """
 ICPSR 22140 graph data loader for diffusion model training.
 
-Wraps the ICPSR22140Processor from the recruiting reference codebase to
-extract parent-child edge pairs and node covariates for training the
-covariate diffusion model.
+Extracts parent-child edge pairs and node covariates from the ICPSR 22140
+dataset for training the covariate diffusion model.
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Optional
 
 import networkx as nx
 import numpy as np
 
-# Add reference recruiting codebase to path so we can import the processor
-_RECRUITING_ROOT = Path(__file__).resolve().parent.parent.parent / "reference" / "recruting"
-if str(_RECRUITING_ROOT) not in sys.path:
-    sys.path.insert(0, str(_RECRUITING_ROOT))
-
-from core.ICPSR22140_processor import ICPSR22140Processor
+from src.data.icpsr_processor import ICPSRProcessor
 
 
 class ICPSRGraphData:
@@ -47,7 +40,7 @@ class ICPSRGraphData:
         if pickle_cache is None:
             pickle_cache = str(self.data_dir / "processed.pkl")
 
-        self._processor = ICPSR22140Processor(
+        self._processor = ICPSRProcessor(
             tsv_file1, tsv_file2, tsv_file3, pickle_cache
         )
 
