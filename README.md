@@ -72,7 +72,3 @@ Previous run without the fix achieved ~429 mean recruits for Structured RL. Afte
 
 - **AUC (normalised):** area under the recruits-vs-budget curve, divided by budget — measures how efficiently recruits accumulate as budget is spent, not just the final count.
 - **Budget-DQN** note: training completed all 300 episodes, but the runner terminated before the final evaluation step. The reported result is from the best checkpoint during training (episode 80, mean reward = 449.4 at training time). At eval the DQN spent 477/500 budget in 9 rounds then chose to stop, leaving 23 unspent.
-
-### Comparison plot
-
-![Comparison B=500](results/B500/figures/comparison_B500.png)
