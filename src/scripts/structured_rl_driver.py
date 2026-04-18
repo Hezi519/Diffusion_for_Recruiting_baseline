@@ -140,12 +140,18 @@ def main():
     print("--------------------------------------------------------")
     print("Fit Count Model")
     print("--------------------------------------------------------")
-    common_nodes = sorted(set(graph_data.covariates) & set(graph_data.node_degrees))
+    train_nodes, _ = graph_data.train_test_node_split(
+        test_fraction=args.test_fraction,
+        seed=args.seed,
+    )
+    common_nodes = sorted(
+        train_nodes & set(graph_data.covariates) & set(graph_data.node_degrees)
+    )
     covariates_array = np.array([graph_data.covariates[n] for n in common_nodes])
     degrees_array = np.array([graph_data.node_degrees[n] for n in common_nodes])
     count_model = GaussianCountModel(seed=args.seed)
     count_model.fit(covariates_array, degrees_array)
-    print(f"  fitted GaussianCountModel on {len(common_nodes)} nodes")
+    print(f"  fitted GaussianCountModel on {len(common_nodes)} train nodes (leakage-free)")
 
     print("--------------------------------------------------------")
     print("Create Recruiting Environment")
@@ -210,36 +216,25 @@ def main():
     best_reward_so_far = [-1.0]
 
     def on_eval_log(policy_obj, episode, reward):
-        def policy_fn(state):
-            return policy_obj.act_greedy(state).allocation
-
-        x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
-            policy_fn=policy_fn,
-            env=env,
-            initial_frontier_fn=initial_frontier_fn,
-            n_episodes_eval=args.n_episodes_eval,
-            gamma=args.discount,
-        )
-
-        periodic_tag = f"{run_tag}_ep{episode}"
-        save_single_curve(
-            x, y, y_std, traj_rows,
-            args.results_dir, periodic_tag, args.discount,
-            label=f"Structured RL (ep {episode}, reward={reward:.1f})",
-        )
-
         is_new_best = reward > best_reward_so_far[0]
         if is_new_best:
             best_reward_so_far[0] = reward
+            def policy_fn(state):
+                return policy_obj.act_greedy(state).allocation
+            x, y, y_std, traj_rows, _, _ = evaluate_recruiting_curve(
+                policy_fn=policy_fn,
+                env=env,
+                initial_frontier_fn=initial_frontier_fn,
+                n_episodes_eval=args.n_episodes_eval,
+                gamma=args.discount,
+            )
             best_tag = f"{run_tag}_best_ep{episode}"
             save_single_curve(
                 x, y, y_std, traj_rows,
                 args.results_dir, best_tag, args.discount,
                 label=f"Structured RL best (ep {episode}, reward={reward:.1f})",
             )
-            print(f"  [new best] ep={episode}, mean_reward={reward:.1f}")
-        else:
-            print(f"  [eval] ep={episode}, mean_reward={reward:.1f}")
+            print(f"  --> new best  ep={episode}  reward={reward:.1f}")
 
     trainer = StructuredQTrainer(
         env=env,
@@ -264,6 +259,12 @@ def main():
     elapsed = time.time() - t0
 
     os.makedirs(args.results_dir, exist_ok=True)
+
+    if history:
+        import pandas as pd
+        log_path = os.path.join(args.results_dir, f"training_log_{run_tag}.csv")
+        pd.DataFrame(history).to_csv(log_path, index=False)
+        print(f"Training log saved to: {log_path}")
 
     def structured_policy_fn(state):
         return policy.act_greedy(state).allocation

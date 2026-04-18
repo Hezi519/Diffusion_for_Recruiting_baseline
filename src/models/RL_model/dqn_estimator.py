@@ -263,6 +263,37 @@ class BudgetDQNSolver:
 
         self.epsilon = max(self.cfg.eps_end, self.epsilon * self.cfg.eps_decay)
 
+    def save_checkpoint(self, path: str, episode: int) -> None:
+        """Save training state so training can be resumed if interrupted."""
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save({
+            "policy_net": self.policy_net.state_dict(),
+            "target_net": self.target_net.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+            "epsilon": self.epsilon,
+            "total_steps": self.total_steps,
+            "episode": episode,
+            "loss_history": self.loss_history,
+        }, path)
+
+    def load_checkpoint(self, path: str) -> int:
+        """Load training state. Returns the episode to resume from."""
+        ckpt = torch.load(path, map_location=DEVICE)
+        self.policy_net.load_state_dict(ckpt["policy_net"])
+        self.target_net.load_state_dict(ckpt["target_net"])
+        self.optimizer.load_state_dict(ckpt["optimizer"])
+        self.epsilon = ckpt["epsilon"]
+        self.total_steps = ckpt["total_steps"]
+        self.loss_history = ckpt["loss_history"]
+        return int(ckpt["episode"])
+
+    def save_weights(self, path: str) -> None:
+        """Save final policy network weights only."""
+        import os
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.policy_net.state_dict(), path)
+
     def evaluate(self, n_episodes_eval: int, seed_offset: int = 200000) -> np.ndarray:
         episode_rewards: List[float] = []
 
@@ -294,7 +325,11 @@ def run_budget_dqn(
     cfg: DQNConfig,
     log_every_n_episodes: int = 10,
     on_new_best: Callable[["BudgetDQNSolver", int, float], None] | None = None,
+    checkpoint_path: str | None = None,
+    checkpoint_every: int = 50,
+    weights_path: str | None = None,
 ):
+    import os
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
@@ -310,10 +345,17 @@ def run_budget_dqn(
         seed=seed,
     )
 
+    # Resume from checkpoint if one exists
+    start_episode = 0
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        start_episode = learner.load_checkpoint(checkpoint_path)
+        print(f"Resumed from checkpoint at episode {start_episode}/{cfg.train_episodes}")
+
     best_eval_reward = -1.0
     best_eval_episode = -1
+    history: List[dict] = []
 
-    for ep in range(cfg.train_episodes):
+    for ep in range(start_episode, cfg.train_episodes):
         learner.train_one_episode()
 
         if (ep + 1) % learner.cfg.target_update_interval == 0:
@@ -322,6 +364,23 @@ def run_budget_dqn(
         if (ep + 1) % log_every_n_episodes == 0:
             rewards_eval = learner.evaluate(n_episodes_eval=max(1, n_episodes_eval // 2))
             mean_eval_reward = float(np.mean(rewards_eval)) if rewards_eval.size > 0 else 0.0
+            recent_loss = float(np.mean(learner.loss_history[-50:])) if learner.loss_history else 0.0
+
+            history.append({
+                "episode": ep + 1,
+                "eval_reward": mean_eval_reward,
+                "epsilon": learner.epsilon,
+                "total_steps": learner.total_steps,
+                "recent_loss": recent_loss,
+            })
+
+            print(
+                f"[DQN {ep+1:>4}/{cfg.train_episodes}]  "
+                f"eval={mean_eval_reward:6.1f}  "
+                f"loss={recent_loss:.4f}  "
+                f"eps={learner.epsilon:.3f}  "
+                f"steps={learner.total_steps}"
+            )
 
             if mean_eval_reward > best_eval_reward:
                 best_eval_reward = mean_eval_reward
@@ -329,10 +388,18 @@ def run_budget_dqn(
                 if on_new_best is not None:
                     on_new_best(learner, ep + 1, mean_eval_reward)
 
+        if checkpoint_path and (ep + 1) % checkpoint_every == 0:
+            learner.save_checkpoint(checkpoint_path, ep + 1)
+            print(f"  [checkpoint saved at ep {ep+1}]")
+
     rewards = learner.evaluate(n_episodes_eval=n_episodes_eval)
+
+    if weights_path:
+        learner.save_weights(weights_path)
+        print(f"Model weights saved to: {weights_path}")
 
     if best_eval_reward < 0:
         best_eval_reward = 0.0
         best_eval_episode = 0
 
-    return rewards, learner, best_eval_reward, best_eval_episode
+    return rewards, learner, best_eval_reward, best_eval_episode, history
