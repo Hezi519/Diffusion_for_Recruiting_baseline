@@ -7,6 +7,9 @@ from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from src.environment.recruiting_env import RecruitingEnv
@@ -170,11 +173,248 @@ def save_single_curve(
 
 
 def _method_label(method: str) -> str:
+    if method == "random":
+        return "Random"
     if method == "dqn":
         return "Budget-DQN + GreedyAlloc"
     if method == "structured":
         return "Three-Head Structured RL"
+    if method == "gfp":
+        return "Generative Frontier Planning"
     return method
+
+
+def _method_color(method: str) -> str:
+    colors = {
+        "random": "tab:gray",
+        "dqn": "tab:blue",
+        "structured": "tab:green",
+        "gfp": "tab:purple",
+    }
+    return colors.get(method, "tab:orange")
+
+
+def _build_raw_comparison_curves(
+    traj_rows: list[dict],
+    horizon: int,
+    gamma: float,
+) -> dict[str, np.ndarray]:
+    df = pd.DataFrame(traj_rows)
+    required = {
+        "episode",
+        "round",
+        "reward",
+        "cumulative_budget_spent",
+        "cumulative_recruits",
+    }
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"trajectory rows are missing columns: {sorted(missing)}")
+
+    budget_mat = []
+    recruits_mat = []
+    discounted_mat = []
+
+    for _, ep_df in df.groupby("episode"):
+        ep_df = ep_df.sort_values("round")
+        budgets = []
+        recruits = []
+        discounted = []
+        cumulative_discounted = 0.0
+
+        for _, row in ep_df.iterrows():
+            round_idx = int(row["round"]) - 1
+            cumulative_discounted += float(row["reward"]) * (gamma ** round_idx)
+            budgets.append(float(row["cumulative_budget_spent"]))
+            recruits.append(float(row["cumulative_recruits"]))
+            discounted.append(cumulative_discounted)
+
+        while len(budgets) < horizon:
+            budgets.append(budgets[-1] if budgets else 0.0)
+            recruits.append(recruits[-1] if recruits else 0.0)
+            discounted.append(discounted[-1] if discounted else 0.0)
+
+        budget_mat.append(np.asarray(budgets[:horizon], dtype=np.float32))
+        recruits_mat.append(np.asarray(recruits[:horizon], dtype=np.float32))
+        discounted_mat.append(np.asarray(discounted[:horizon], dtype=np.float32))
+
+    budget_arr = np.asarray(budget_mat, dtype=np.float32)
+    recruits_arr = np.asarray(recruits_mat, dtype=np.float32)
+    discounted_arr = np.asarray(discounted_mat, dtype=np.float32)
+
+    return {
+        "budget_x": budget_arr.mean(axis=0),
+        "time_x": np.arange(1, horizon + 1, dtype=np.float32),
+        "recruits_y": recruits_arr.mean(axis=0),
+        "recruits_y_std": recruits_arr.std(axis=0),
+        "discounted_y": discounted_arr.mean(axis=0),
+        "discounted_y_std": discounted_arr.std(axis=0),
+        "final_recruits": recruits_arr[:, -1],
+        "final_discounted": discounted_arr[:, -1],
+    }
+
+
+def _prepend_origin(
+    x: np.ndarray,
+    y: np.ndarray,
+    y_std: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return (
+        np.concatenate([[0.0], x]),
+        np.concatenate([[0.0], y]),
+        np.concatenate([[0.0], y_std]),
+    )
+
+
+def _plot_raw_comparison(
+    curves_by_method: dict[str, dict[str, np.ndarray]],
+    x_key: str,
+    y_key: str,
+    y_std_key: str,
+    xlabel: str,
+    ylabel: str,
+    title: str,
+    out_path: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(8, 4.8))
+    y_max = 0.0
+
+    for method, curves in curves_by_method.items():
+        color = _method_color(method)
+        x, y, y_std = _prepend_origin(curves[x_key], curves[y_key], curves[y_std_key])
+        ax.plot(x, y, color=color, linewidth=2, label=_method_label(method))
+        ax.fill_between(
+            x,
+            np.maximum(0.0, y - y_std),
+            y + y_std,
+            color=color,
+            alpha=0.16,
+        )
+        y_max = max(y_max, float(np.max(y + y_std)))
+
+        ax.plot(float(x[-1]), float(y[-1]), "o", color=color, markersize=5, zorder=5)
+        ax.annotate(
+            f"{float(y[-1]):.1f}",
+            xy=(float(x[-1]), float(y[-1])),
+            xytext=(-8, 6),
+            textcoords="offset points",
+            fontsize=8,
+            color=color,
+            ha="right",
+            va="bottom",
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.set_ylim(0, max(1.0, y_max * 1.12))
+    ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.55)
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(fontsize=9)
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200)
+    plt.close(fig)
+    print(f"Saved plot to: {out_path}")
+
+
+def save_four_panel_curve_outputs(
+    bundles: dict[str, Any],
+    results_dir: str,
+    run_tag: str,
+    gamma: float,
+    horizon: int,
+) -> None:
+    """Save four raw-scale comparison plots and the curve data behind them."""
+    os.makedirs(results_dir, exist_ok=True)
+    curves_by_method = {
+        method: _build_raw_comparison_curves(bundle.traj_rows, horizon=horizon, gamma=gamma)
+        for method, bundle in bundles.items()
+    }
+
+    curve_rows = []
+    for method, curves in curves_by_method.items():
+        for idx in range(horizon):
+            curve_rows.append(
+                {
+                    "method": method,
+                    "method_label": _method_label(method),
+                    "round": idx + 1,
+                    "budget_x": float(curves["budget_x"][idx]),
+                    "time_x": float(curves["time_x"][idx]),
+                    "recruits_y": float(curves["recruits_y"][idx]),
+                    "recruits_y_std": float(curves["recruits_y_std"][idx]),
+                    "discounted_y": float(curves["discounted_y"][idx]),
+                    "discounted_y_std": float(curves["discounted_y_std"][idx]),
+                }
+            )
+    curve_csv_path = os.path.join(results_dir, f"comparison_curve_data_{run_tag}.csv")
+    pd.DataFrame(curve_rows).to_csv(curve_csv_path, index=False)
+    print(f"Saved comparison curve data to: {curve_csv_path}")
+
+    npz_payload = {}
+    for method, curves in curves_by_method.items():
+        for key, value in curves.items():
+            npz_payload[f"{method}_{key}"] = value
+    curve_npz_path = os.path.join(results_dir, f"comparison_curve_data_{run_tag}.npz")
+    np.savez(curve_npz_path, **npz_payload)
+    print(f"Saved comparison curve vectors to: {curve_npz_path}")
+
+    stats_rows = []
+    for method, curves in curves_by_method.items():
+        stats_rows.append(
+            {
+                "method": method,
+                "method_label": _method_label(method),
+                "mean_final_recruits": float(np.mean(curves["final_recruits"])),
+                "std_final_recruits": float(np.std(curves["final_recruits"])),
+                "mean_final_discounted_reward": float(np.mean(curves["final_discounted"])),
+                "std_final_discounted_reward": float(np.std(curves["final_discounted"])),
+            }
+        )
+    stats_path = os.path.join(results_dir, f"comparison_stats_{run_tag}.csv")
+    pd.DataFrame(stats_rows).to_csv(stats_path, index=False)
+    print(f"Saved comparison stats to: {stats_path}")
+
+    _plot_raw_comparison(
+        curves_by_method,
+        x_key="budget_x",
+        y_key="recruits_y",
+        y_std_key="recruits_y_std",
+        xlabel="Budget spent",
+        ylabel="Cumulative recruits",
+        title=f"Cumulative recruits by budget (discount={gamma})",
+        out_path=os.path.join(results_dir, f"comparison_recruits_by_budget_{run_tag}.png"),
+    )
+    _plot_raw_comparison(
+        curves_by_method,
+        x_key="time_x",
+        y_key="recruits_y",
+        y_std_key="recruits_y_std",
+        xlabel="Time spent",
+        ylabel="Cumulative recruits",
+        title=f"Cumulative recruits by time (discount={gamma})",
+        out_path=os.path.join(results_dir, f"comparison_recruits_by_time_{run_tag}.png"),
+    )
+    _plot_raw_comparison(
+        curves_by_method,
+        x_key="budget_x",
+        y_key="discounted_y",
+        y_std_key="discounted_y_std",
+        xlabel="Budget spent",
+        ylabel="Accumulated discounted reward",
+        title=f"Discounted reward by budget (discount={gamma})",
+        out_path=os.path.join(results_dir, f"comparison_discounted_reward_by_budget_{run_tag}.png"),
+    )
+    _plot_raw_comparison(
+        curves_by_method,
+        x_key="time_x",
+        y_key="discounted_y",
+        y_std_key="discounted_y_std",
+        xlabel="Time spent",
+        ylabel="Accumulated discounted reward",
+        title=f"Discounted reward by time (discount={gamma})",
+        out_path=os.path.join(results_dir, f"comparison_discounted_reward_by_time_{run_tag}.png"),
+    )
 
 
 def save_comparison_curves(
@@ -200,8 +440,9 @@ def save_comparison_curves(
         print(f"Saved trajectories to: {traj_path}")
 
     combined_rows = []
-    for bundle in bundles.values():
-        combined_rows.extend(bundle.traj_rows)
+    for method, bundle in bundles.items():
+        for row in bundle.traj_rows:
+            combined_rows.append({"method": method, **row})
     combined_path = os.path.join(results_dir, f"trajectories_{run_tag}_all_methods.csv")
     pd.DataFrame(combined_rows).to_csv(combined_path, index=False)
     print(f"Saved combined trajectories to: {combined_path}")
