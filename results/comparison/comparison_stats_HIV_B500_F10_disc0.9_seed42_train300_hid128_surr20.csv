@@ -1,0 +1,4 @@
+method,mean_final_recruits,std_final_recruits,mean_final_discounted_reward,std_final_discounted_reward
+Budget-DQN + GreedyAlloc,475.29998779296875,5.235456466674805,385.4844055175781,12.989466667175293
+Three-Head Structured RL,407.6000061035156,26.123552322387695,161.27224731445312,26.82828140258789
+Adaptive Surrogate,491.5,0.5,412.0299987792969,0.260009765625
