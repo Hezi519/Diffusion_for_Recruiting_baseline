@@ -1,0 +1,8 @@
+torch>=2.0
+numpy
+scipy
+scikit-learn
+networkx
+matplotlib
+tqdm
+pandas
