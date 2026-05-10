@@ -36,6 +36,31 @@ COVARIATE_GROUPS: list[tuple[str, int, int]] = [
 
 COVARIATE_DIM = 72
 
+# Empirical per-group inheritance probabilities derived from ICPSR 22140 DS0002 (all networks).
+# For each recruiter-recruit pair, we compute the fraction of pairs sharing the same
+# category, then back out the inherit_prob via: p = (match_rate - 1/K) / (1 - 1/K).
+# Based on 73,669 recruitment dyads (NTYPE1=1, NTYPE2=3) across all disease subnetworks.
+# ORIENT: ORIENT2 is entirely missing in the dataset; value is the mean of all other groups.
+EMPIRICAL_INHERIT_PROBS: dict[str, float] = {
+    "LOCAL":   0.766,
+    "RACE":    0.474,
+    "ETHN":    0.861,
+    "SEX":     0.223,
+    "ORIENT":  0.744,
+    "BEHAV":   0.762,
+    "PRO":     0.573,
+    "PIMP":    0.891,
+    "JOHN":    0.680,
+    "DEALER":  0.775,
+    "DRUGMAN": 0.979,
+    "THIEF":   0.940,
+    "RETIRED": 0.960,
+    "HWIFE":   0.861,
+    "DISABLE": 0.865,
+    "UNEMP":   0.339,
+    "STREETS": 0.952,
+}
+
 
 def continuous_to_one_hot(x: np.ndarray) -> np.ndarray:
     """Convert continuous diffusion output to valid one-hot covariates.
