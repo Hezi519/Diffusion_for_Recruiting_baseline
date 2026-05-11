@@ -239,6 +239,8 @@ class DDPMCovariateModel(AbstractCovariateModel):
         self.schedule = DDPMSchedule(num_steps, beta_min, beta_max)
         self.device = _get_device(device)
         self.network = SimpleNN(cov_dim, hidden_dim).to(self.device)
+        # Cache schedule tensors to avoid recomputing on every sample() call
+        self._betas, self._alphas, self._alpha_bars = self.schedule.compute(self.device)
 
     def train(
         self,
@@ -268,6 +270,8 @@ class DDPMCovariateModel(AbstractCovariateModel):
             epoch_loss = 0.0
             count = 0
             for x in data_loader:
+                if isinstance(x, (list, tuple)):
+                    x = x[0]
                 x = x.view(x.size(0), -1).to(self.device)
 
                 # Sample random timestep
@@ -304,7 +308,7 @@ class DDPMCovariateModel(AbstractCovariateModel):
                 print(f"Epoch {epoch}, Loss={final_loss:.5f}")
 
         print("Finished training!")
-        return {"final_loss": final_loss}
+        return {"final_loss": final_loss, "n_pairs": len(dataset)}
 
     @torch.no_grad()
     def sample(
@@ -322,12 +326,10 @@ class DDPMCovariateModel(AbstractCovariateModel):
         generator = torch.Generator(device=self.device)
         generator.manual_seed(seed)
 
-        betas, alphas, alpha_bars = self.schedule.compute(self.device, dtype=conditions.dtype)
-
         self.network.eval()
         x_0 = p_sample_loop(
             self.network, conditions, self.schedule,
-            betas, alphas, alpha_bars, generator=generator,
+            self._betas, self._alphas, self._alpha_bars, generator=generator,
         )
 
         return continuous_to_one_hot(x_0.cpu().numpy())

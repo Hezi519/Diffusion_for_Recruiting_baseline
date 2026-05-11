@@ -1,26 +1,19 @@
 """
 ICPSR 22140 graph data loader for diffusion model training.
 
-Wraps the ICPSR22140Processor from the recruiting reference codebase to
-extract parent-child edge pairs and node covariates for training the
-covariate diffusion model.
+Extracts parent-child edge pairs and node covariates from the ICPSR 22140
+dataset for training the covariate diffusion model.
 """
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Optional
 
 import networkx as nx
 import numpy as np
 
-# Add reference recruiting codebase to path so we can import the processor
-_RECRUITING_ROOT = Path(__file__).resolve().parent.parent.parent / "reference" / "recruting"
-if str(_RECRUITING_ROOT) not in sys.path:
-    sys.path.insert(0, str(_RECRUITING_ROOT))
-
-from core.ICPSR22140_processor import ICPSR22140Processor
+from src.data.icpsr_processor import ICPSRProcessor
 
 
 class ICPSRGraphData:
@@ -47,7 +40,7 @@ class ICPSRGraphData:
         if pickle_cache is None:
             pickle_cache = str(self.data_dir / "processed.pkl")
 
-        self._processor = ICPSR22140Processor(
+        self._processor = ICPSRProcessor(
             tsv_file1, tsv_file2, tsv_file3, pickle_cache
         )
 
@@ -129,6 +122,34 @@ class ICPSRGraphData:
         train_pairs = [self._edge_pairs[i] for i in train_idx]
         test_pairs = [self._edge_pairs[i] for i in test_idx]
         return train_pairs, test_pairs
+
+    def train_test_node_split(
+        self,
+        test_fraction: float = 0.2,
+        seed: int = 42,
+    ) -> tuple[set[int], set[int]]:
+        """Split nodes into train/test sets for count model fitting.
+
+        Uses a node-level split (not edge-level) so that a node's ground-truth
+        out-degree is either fully in train or fully held out, preventing the
+        count model from memorising test-node recruitment counts.
+
+        Args:
+            test_fraction: Fraction of nodes to hold out.
+            seed: Random seed (use the same seed as train_test_split for
+                  consistency).
+
+        Returns:
+            (train_nodes, test_nodes) as sets of integer node IDs.
+        """
+        rng = np.random.default_rng(seed)
+        all_nodes = sorted(self._covariates.keys())
+        n = len(all_nodes)
+        shuffled = rng.permutation(n)
+        split = int(n * (1 - test_fraction))
+        train_nodes = {all_nodes[i] for i in shuffled[:split]}
+        test_nodes = {all_nodes[i] for i in shuffled[split:]}
+        return train_nodes, test_nodes
 
     def sample_initial_frontier(
         self,
