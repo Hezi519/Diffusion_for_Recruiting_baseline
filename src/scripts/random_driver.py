@@ -1,12 +1,16 @@
 """
 Evaluate the recruiting environment with a random allocation policy.
 
+Each round:
+  s ~ Uniform{0, 1, ..., budget_remaining}
+  action ~ Multinomial(s, uniform over n frontier members)
+
 Usage:
     python -m src.scripts.random_driver \
         --model_path checkpoints/diffusion/ddpm_HIV.pt \
         --data_dir ICPSR_22140 \
         --std_name HIV \
-        --budget 100 \
+        --budget 500 \
         --initial_frontier_size 10 \
         --n_episodes_eval 10 \
         --seed 42
@@ -23,7 +27,7 @@ from src.data.icpsr_loader import ICPSRGraphData
 from src.environment.recruiting_env import RecruitingEnv
 from src.models.count_model.gaussian_count_model import GaussianCountModel
 from src.models.covariate_model.ddpm_covariate_model import DDPMCovariateModel
-from src.models.policy.random_policy import RandomPolicy
+from src.models.random.policy import RandomPolicy
 from src.scripts.eval_utils import evaluate_recruiting_curve, save_single_curve
 
 
