@@ -12,14 +12,14 @@ Instead of directly learning over a combinatorial action space, we factorize the
 
 2. **Support size (top-k selection)**
 
-   $$
+   ```math
    k_t \sim Q_k(s_t)
-   $$
+   ```
 
 3. **Node-level scoring**
-   $$
+   ```math
    s_i = Q_{\text{node}}(s_t, x_i)
-   $$
+   ```
 
 These are combined into a final allocation using a deterministic builder.
 
@@ -31,20 +31,20 @@ The state is encoded using a **DeepSets-style encoder**:
 
 - Node embedding:
 
-  $$
+  ```math
   h_i = \phi(x_i)
-  $$
+  ```
 
 - Mean pooling:
 
-  $$
+  ```math
   h_{\text{pool}} = \frac{1}{n_t} \sum_{i=1}^{n_t} h_i
-  $$
+  ```
 
 - Final state vector:
-  $$
+  ```math
   s_t = \big[h_{\text{pool}},\ n_t,\ B_t,\ t\big]
-  $$
+  ```
 
 This produces a fixed-dimensional representation regardless of frontier size.
 
@@ -80,18 +80,18 @@ Each node score is computed by concatenating the global state with node features
 
 Given $b_t$, $k_t$, and node scores:
 
-1. Select top-$k$ nodes by score
+1. Select top-k nodes by score
 2. Apply softmax within selected nodes:
 
-   $$
+   ```math
    w_i = \frac{\exp(s_i)}{\sum_{j \in \text{top-}k} \exp(s_j)}
-   $$
+   ```
 
 3. Allocate budget proportionally:
 
-   $$
+   ```math
    \tilde{a}_i = b_t \cdot w_i
-   $$
+   ```
 
 4. Convert to integers using **largest-remainder rounding**
 
@@ -113,9 +113,9 @@ The policy is **value-based with structured decoding**:
 
 Overall:
 
-$$
+```math
 \pi(s_t) = \text{Builder}(b_t, k_t, Q_{\text{node}})
-$$
+```
 
 ---
 
@@ -123,15 +123,15 @@ $$
 
 ### 5.1 Budget Head (TD Learning)
 
-$$
+```math
 y^{(b)} = r_t + \gamma \max_{b'} Q_{\text{budget}}(s_{t+1}, b')
-$$
+```
 
 ### 5.2 k Head (TD Learning)
 
-$$
+```math
 y^{(k)} = r_t + \gamma \max_{k'} Q_k(s_{t+1}, k')
-$$
+```
 
 ---
 
@@ -139,19 +139,19 @@ $$
 
 Node scores represent **marginal long-term value per unit budget**:
 
-$$
+```math
 Q_{\text{node}}(s, i) \approx \text{value of allocating 1 unit to node } i
-$$
+```
 
 ### Target:
 
-$$
+```math
 y_i =
 \underbrace{\text{immediate gain}_i}_{\text{count model}}
 +
 \gamma \cdot
 \underbrace{\max_b Q_{\text{budget}}(s_i', b)}_{\text{future value}}
-$$
+```
 
 Where:
 
@@ -166,9 +166,9 @@ This enables **TD-style learning without multi-step rollout**.
 
 We store transitions:
 
-$$
+```math
 (s_t, b_t, k_t, r_t, s_{t+1}, \text{done})
-$$
+```
 
 Node-level targets are recomputed during training.
 

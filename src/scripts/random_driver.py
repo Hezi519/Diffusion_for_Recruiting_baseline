@@ -24,7 +24,7 @@ from src.environment.recruiting_env import RecruitingEnv
 from src.models.count_model.gaussian_count_model import GaussianCountModel
 from src.models.covariate_model.ddpm_covariate_model import DDPMCovariateModel
 from src.models.policy.random_policy import RandomPolicy
-from src.scripts.eval_utils import evaluate_recruiting_curve, save_final_eval_results
+from src.scripts.eval_utils import evaluate_recruiting_curve, save_single_curve
 
 
 def main():
@@ -131,7 +131,7 @@ def main():
 
     elapsed = time.time() - t0
 
-    save_final_eval_results(
+    save_single_curve(
         x=x, y=y, y_std=y_std,
         traj_rows=traj_rows,
         results_dir=args.results_dir,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from typing import Callable
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -19,6 +19,7 @@ def evaluate_recruiting_curve(
     initial_frontier_fn: Callable[[], np.ndarray],
     n_episodes_eval: int,
     gamma: float,
+    normalize: bool = False,
 ):
     """Evaluate a policy and produce recruitment curves.
 
@@ -29,6 +30,9 @@ def evaluate_recruiting_curve(
         initial_frontier_fn: Callable returning initial frontier covariates.
         n_episodes_eval: Number of evaluation episodes.
         gamma: Discount factor for computing discounted returns.
+        normalize: If True, x is cumulative_budget_spent / initial_budget and
+            y is cumulative_recruits / total_recruits_this_episode (both in [0,1]).
+            Normalization is applied per-episode before horizon-padding.
 
     Returns:
         x: Mean cumulative budget spent by round.
@@ -89,6 +93,12 @@ def evaluate_recruiting_curve(
             if done:
                 break
 
+        if normalize:
+            budget_denom = max(float(initial_budget), 1.0)
+            recruits_denom = max(float(cumulative_recruits), 1.0)
+            x_ep = [v / budget_denom for v in x_ep]
+            y_ep = [v / recruits_denom for v in y_ep]
+
         while len(x_ep) < horizon:
             x_ep.append(x_ep[-1] if len(x_ep) > 0 else 0.0)
             y_ep.append(y_ep[-1] if len(y_ep) > 0 else 0.0)
@@ -113,7 +123,7 @@ def evaluate_recruiting_curve(
     return x, y, y_std, traj_rows, np.asarray(discounted_returns), np.asarray(total_rewards)
 
 
-def save_final_eval_results(
+def save_single_curve(
     x: np.ndarray,
     y: np.ndarray,
     y_std: np.ndarray,
@@ -123,7 +133,7 @@ def save_final_eval_results(
     gamma: float,
     label: str = "Policy",
 ) -> None:
-    """Save final evaluation results: NPZ, CSV, and PNG."""
+    """Save a single-method evaluation: NPZ, CSV, and absolute-axes PNG."""
     os.makedirs(results_dir, exist_ok=True)
 
     npz_path = f"{results_dir}/eval_results_{run_tag}.npz"
@@ -157,3 +167,74 @@ def save_final_eval_results(
     plt.savefig(png_path, dpi=200)
     print("Saved plot to:", png_path)
     plt.close()
+
+
+def _method_label(method: str) -> str:
+    if method == "dqn":
+        return "Budget-DQN + GreedyAlloc"
+    if method == "structured":
+        return "Three-Head Structured RL"
+    return method
+
+
+def save_comparison_curves(
+    bundles: dict[str, Any],
+    results_dir: str,
+    run_tag: str,
+    gamma: float,
+) -> None:
+    """Save per-method NPZ/CSV + a normalized-axes comparison PNG.
+
+    Each value in `bundles` must duck-type on `.x`, `.y`, `.y_std`, `.traj_rows`.
+    Curves are expected to already be normalized to [0, 1].
+    """
+    os.makedirs(results_dir, exist_ok=True)
+
+    for method, bundle in bundles.items():
+        npz_path = os.path.join(results_dir, f"eval_results_{run_tag}_{method}.npz")
+        np.savez(npz_path, x=bundle.x, y=bundle.y, y_std=bundle.y_std)
+        print(f"Saved eval vectors to: {npz_path}")
+
+        traj_path = os.path.join(results_dir, f"trajectories_{run_tag}_{method}.csv")
+        pd.DataFrame(bundle.traj_rows).to_csv(traj_path, index=False)
+        print(f"Saved trajectories to: {traj_path}")
+
+    combined_rows = []
+    for bundle in bundles.values():
+        combined_rows.extend(bundle.traj_rows)
+    combined_path = os.path.join(results_dir, f"trajectories_{run_tag}_all_methods.csv")
+    pd.DataFrame(combined_rows).to_csv(combined_path, index=False)
+    print(f"Saved combined trajectories to: {combined_path}")
+
+    plt.figure(figsize=(8, 4))
+    for method, bundle in bundles.items():
+        x_plot = np.concatenate([[0.0], bundle.x])
+        y_plot = np.concatenate([[0.0], bundle.y])
+        y_std_plot = np.concatenate([[0.0], bundle.y_std])
+        label = _method_label(method)
+        plt.plot(x_plot, y_plot, linestyle="-", label=label)
+        plt.fill_between(
+            x_plot,
+            np.maximum(0.0, y_plot - y_std_plot),
+            np.minimum(1.0, y_plot + y_std_plot),
+            alpha=0.20,
+        )
+
+    plt.axvline(x=0.5, linestyle=":", color="gray", alpha=0.7)
+    plt.xlabel("Fraction of budget spent")
+    plt.ylabel("Fraction of total recruits obtained (normalized)")
+    plt.title(f"Recruiting policies with discount = {gamma}")
+    plt.xlim(0.0, 1.0)
+    plt.ylim(0.0, 1.05)
+    plt.legend()
+    plt.tight_layout()
+
+    plot_name = (
+        f"recruiting_curve_{run_tag}.png"
+        if len(bundles) == 1
+        else f"recruiting_curve_{run_tag}_comparison.png"
+    )
+    png_path = os.path.join(results_dir, plot_name)
+    plt.savefig(png_path, dpi=200)
+    plt.close()
+    print(f"Saved plot to: {png_path}")
