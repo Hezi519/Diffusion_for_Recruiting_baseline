@@ -53,7 +53,7 @@ from src.models.count_model.tunnel_vision_count_model import TunnelVisionCountMo
 from src.models.covariate_model.synthetic_covariate_model import SyntheticCovariateModel
 from src.models.covariate_model.ddpm_covariate_model import DDPMCovariateModel
 from src.models.covariate_model.tunnel_vision_covariate_model import TunnelVisionCovariateModel
-from src.models.policy.random_policy import RandomPolicy
+from src.models.random.policy import RandomPolicy
 from src.scripts.eval_utils import (
     evaluate_recruiting_curve,
     save_comparison_curves,
