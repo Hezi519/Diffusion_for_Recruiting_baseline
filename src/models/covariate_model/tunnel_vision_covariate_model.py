@@ -6,7 +6,9 @@ The LOCAL covariate group encodes node type and determines the offspring type:
     Parent Type B (LOCAL=1) → child LOCAL=1 (Type B, self-replicating) with prob p_cross
     Parent Type C (LOCAL=2/3)→ child LOCAL=2 (Type C, stays dead) with prob p_stay
 
-All other covariate groups are inherited normally (prob inherit_prob per group).
+All other covariate groups use per-group inheritance probabilities. By default
+these are derived empirically from 73,669 ICPSR 22140 recruiter-recruit pairs
+across all disease subnetworks (EMPIRICAL_INHERIT_PROBS). Pass a scalar inherit_prob to override uniformly.
 
 This creates the "boom-bust vs sustainable" structure:
   - Allocating to A gets many immediate recruits but those recruits are dead-ends (TypeC).
@@ -28,11 +30,11 @@ import pickle
 import numpy as np
 from torch.utils.data import Dataset
 
-from src.data.covariate_spec import COVARIATE_DIM, COVARIATE_GROUPS
+from src.data.covariate_spec import COVARIATE_DIM, COVARIATE_GROUPS, EMPIRICAL_INHERIT_PROBS
 from src.models.covariate_model.abstract_covariate_model import AbstractCovariateModel
 from src.models.count_model.tunnel_vision_count_model import node_types
 
-_LOCAL_IDX = 0   # index of LOCAL group in COVARIATE_GROUPS
+_LOCAL_IDX = 0
 _LOCAL_NAME, _LOCAL_START, _LOCAL_END = COVARIATE_GROUPS[_LOCAL_IDX]
 
 
@@ -41,24 +43,27 @@ class TunnelVisionCovariateModel(AbstractCovariateModel):
 
     Args:
         p_cross: Probability that the offspring's type follows the designed
-            transition (A→C, B→A, C→C). With probability 1-p_cross the
-            LOCAL group is sampled uniformly (exploration noise).
-        inherit_prob: Per-group inheritance probability for all covariate
-            groups *other* than LOCAL. Matches SyntheticCovariateModel.
+            transition (A→C, B→B, C→C). With probability 1-p_cross the
+            LOCAL group is sampled uniformly.
+        inherit_prob: If None (default), uses EMPIRICAL_INHERIT_PROBS for all
+            non-LOCAL groups. If a float, overrides all non-LOCAL groups uniformly.
         seed: Random seed.
     """
 
     def __init__(
         self,
         p_cross: float = 0.85,
-        inherit_prob: float = 0.7,
+        inherit_prob: float | None = None,
         seed: int = 42,
     ) -> None:
         self.p_cross = p_cross
         self.inherit_prob = inherit_prob
         self.seed = seed
+        if inherit_prob is None:
+            self._group_probs = {name: EMPIRICAL_INHERIT_PROBS[name] for name, _, _ in COVARIATE_GROUPS}
+        else:
+            self._group_probs = {name: inherit_prob for name, _, _ in COVARIATE_GROUPS}
 
-    # Designed offspring type per parent type (LOCAL category index)
     # A(0)→C(2), B(1)→B(1) [self-replicating], C(2)→C(2), C(3)→C(2)
     _OFFSPRING_TYPE = {0: 2, 1: 1, 2: 2, 3: 2}
 
@@ -72,11 +77,11 @@ class TunnelVisionCovariateModel(AbstractCovariateModel):
     ) -> np.ndarray:
         """Generate one child per parent row with type transitions.
 
-        For the LOCAL group: with prob p_cross, the child's type follows
-        the designed transition. Otherwise the LOCAL group is drawn uniformly.
+        LOCAL group: child type follows the designed transition with prob p_cross,
+        otherwise sampled uniformly.
 
-        For all other groups: inherit parent's value with prob inherit_prob,
-        otherwise sample uniformly.
+        All other groups: inherit parent's value with the group's empirical
+        probability, otherwise sampled uniformly.
 
         Args:
             parent_covariates: (n, 72) parent covariate vectors.
@@ -95,21 +100,18 @@ class TunnelVisionCovariateModel(AbstractCovariateModel):
 
         parent_type_idx = node_types(parent_covariates)
 
-        for g_idx, (_, start, end) in enumerate(COVARIATE_GROUPS):
+        for g_idx, (name, start, end) in enumerate(COVARIATE_GROUPS):
             group_size = end - start
 
             if g_idx == _LOCAL_IDX:
-                # Designed type transition for the LOCAL group
-                designed = np.array(
-                    [self._OFFSPRING_TYPE[t] for t in parent_type_idx]
-                )
+                designed = np.array([self._OFFSPRING_TYPE[t] for t in parent_type_idx])
                 use_cross = rng.random(n) < self.p_cross
                 random_local = rng.integers(0, group_size, size=n)
                 chosen = np.where(use_cross, designed, random_local)
             else:
-                # Normal inheritance for all other groups
+                p = self._group_probs[name]
                 parent_active = np.argmax(parent_covariates[:, start:end], axis=1)
-                inherit_mask = rng.random(n) < self.inherit_prob
+                inherit_mask = rng.random(n) < p
                 random_choice = rng.integers(0, group_size, size=n)
                 chosen = np.where(inherit_mask, parent_active, random_choice)
 
@@ -119,10 +121,7 @@ class TunnelVisionCovariateModel(AbstractCovariateModel):
 
     def save(self, path: str) -> None:
         with open(path, "wb") as f:
-            pickle.dump(
-                {"p_cross": self.p_cross, "inherit_prob": self.inherit_prob, "seed": self.seed},
-                f,
-            )
+            pickle.dump({"p_cross": self.p_cross, "inherit_prob": self.inherit_prob, "seed": self.seed}, f)
 
     @classmethod
     def load(cls, path: str, device: str = "auto") -> TunnelVisionCovariateModel:

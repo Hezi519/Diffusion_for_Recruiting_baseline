@@ -270,6 +270,8 @@ class DDPMCovariateModel(AbstractCovariateModel):
             epoch_loss = 0.0
             count = 0
             for x in data_loader:
+                if isinstance(x, (list, tuple)):
+                    x = x[0]
                 x = x.view(x.size(0), -1).to(self.device)
 
                 # Sample random timestep
@@ -306,7 +308,7 @@ class DDPMCovariateModel(AbstractCovariateModel):
                 print(f"Epoch {epoch}, Loss={final_loss:.5f}")
 
         print("Finished training!")
-        return {"final_loss": final_loss}
+        return {"final_loss": final_loss, "n_pairs": len(dataset)}
 
     @torch.no_grad()
     def sample(
