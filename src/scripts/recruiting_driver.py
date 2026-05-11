@@ -99,6 +99,10 @@ def main():
 
     parser.add_argument("--log_every", type=int, default=10)
     parser.add_argument("--results_dir", type=str, default="results")
+    parser.add_argument("--checkpoint_dir", type=str, default=None,
+                        help="Directory for saving/loading training checkpoints and final weights")
+    parser.add_argument("--checkpoint_every", type=int, default=50,
+                        help="Save a checkpoint every N episodes")
 
     args = parser.parse_args()
 
@@ -143,13 +147,19 @@ def main():
     print("Fit Count Model")
     print("--------------------------------------------------------")
 
-    common_nodes = sorted(set(graph_data.covariates) & set(graph_data.node_degrees))
+    train_nodes, _ = graph_data.train_test_node_split(
+        test_fraction=args.test_fraction,
+        seed=args.seed,
+    )
+    common_nodes = sorted(
+        train_nodes & set(graph_data.covariates) & set(graph_data.node_degrees)
+    )
     covariates_array = np.array([graph_data.covariates[n] for n in common_nodes])
     degrees_array = np.array([graph_data.node_degrees[n] for n in common_nodes])
 
     count_model = GaussianCountModel(seed=args.seed)
     count_model.fit(covariates_array, degrees_array)
-    print(f"  fitted GaussianCountModel on {len(common_nodes)} nodes")
+    print(f"  fitted GaussianCountModel on {len(common_nodes)} train nodes (leakage-free)")
 
     print("--------------------------------------------------------")
     print("Create Recruiting Environment")
@@ -216,7 +226,14 @@ def main():
 
     t0 = time.time()
 
-    rewards, learner, best_eval_reward, best_eval_episode = run_budget_dqn(
+    checkpoint_path = None
+    weights_path = None
+    if args.checkpoint_dir:
+        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(args.checkpoint_dir, f"dqn_{run_tag}_checkpoint.pt")
+        weights_path = os.path.join(args.checkpoint_dir, f"dqn_{run_tag}_weights.pt")
+
+    rewards, learner, best_eval_reward, best_eval_episode, dqn_history = run_budget_dqn(
         env=env,
         initial_frontier_fn=initial_frontier_fn,
         budget_allocator=lambda state, k: greedy_allocator(state, k, env.count_model),
@@ -225,11 +242,20 @@ def main():
         cfg=cfg,
         log_every_n_episodes=args.log_every,
         on_new_best=on_new_best,
+        checkpoint_path=checkpoint_path,
+        checkpoint_every=args.checkpoint_every,
+        weights_path=weights_path,
     )
 
     elapsed = time.time() - t0
 
     os.makedirs(args.results_dir, exist_ok=True)
+
+    if dqn_history:
+        import pandas as pd
+        log_path = os.path.join(args.results_dir, f"training_log_{run_tag}.csv")
+        pd.DataFrame(dqn_history).to_csv(log_path, index=False)
+        print(f"Training log saved to: {log_path}")
 
     def dqn_policy_fn(state):
         budget = learner.select_action(state, greedy=True)

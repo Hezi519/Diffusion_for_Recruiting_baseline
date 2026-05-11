@@ -123,6 +123,34 @@ class ICPSRGraphData:
         test_pairs = [self._edge_pairs[i] for i in test_idx]
         return train_pairs, test_pairs
 
+    def train_test_node_split(
+        self,
+        test_fraction: float = 0.2,
+        seed: int = 42,
+    ) -> tuple[set[int], set[int]]:
+        """Split nodes into train/test sets for count model fitting.
+
+        Uses a node-level split (not edge-level) so that a node's ground-truth
+        out-degree is either fully in train or fully held out, preventing the
+        count model from memorising test-node recruitment counts.
+
+        Args:
+            test_fraction: Fraction of nodes to hold out.
+            seed: Random seed (use the same seed as train_test_split for
+                  consistency).
+
+        Returns:
+            (train_nodes, test_nodes) as sets of integer node IDs.
+        """
+        rng = np.random.default_rng(seed)
+        all_nodes = sorted(self._covariates.keys())
+        n = len(all_nodes)
+        shuffled = rng.permutation(n)
+        split = int(n * (1 - test_fraction))
+        train_nodes = {all_nodes[i] for i in shuffled[:split]}
+        test_nodes = {all_nodes[i] for i in shuffled[split:]}
+        return train_nodes, test_nodes
+
     def sample_initial_frontier(
         self,
         n: int,

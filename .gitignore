@@ -4,3 +4,4 @@ checkpoints/
 ICPSR_22140/
 *.pyc
 results/
+*.pdf
