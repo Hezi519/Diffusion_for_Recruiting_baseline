@@ -19,6 +19,7 @@ class GFPTrainerConfig:
     max_steps_per_episode: int = 50
     state_pool_size: int = 256
     random_rollout_episodes: int = 64
+    log_every: int = 0
 
 
 class GFPTrainer:
@@ -120,6 +121,12 @@ class GFPTrainer:
         if not pool:
             return {"final_loss": 0.0, "state_pool_size": 0}
 
+        if self.cfg.log_every > 0:
+            print(
+                f"  [GFP] state pool collected: size={len(pool)}, "
+                f"starting {self.cfg.train_iterations} value-iteration steps"
+            )
+
         losses: list[float] = []
         for it in range(self.cfg.train_iterations):
             idx = self.rng.integers(0, len(pool), size=max(1, self.cfg.batch_size))
@@ -149,6 +156,12 @@ class GFPTrainer:
             self.optimizer.step()
 
             losses.append(float(loss.item()))
+            if self.cfg.log_every > 0 and (it + 1) % self.cfg.log_every == 0:
+                recent = losses[-self.cfg.log_every:]
+                print(
+                    f"  [GFP it {it+1}/{self.cfg.train_iterations}] "
+                    f"loss={losses[-1]:.4f} avg_loss={float(np.mean(recent)):.4f}"
+                )
             if (it + 1) % max(1, self.cfg.target_update_interval) == 0:
                 self._sync_target()
                 self.laplace_provider.clear_cache()
